@@ -17,13 +17,21 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-24.04
+    # Same distribution and toolchain packages (gcc 14.2.rel1, newlib-nano) as the builds tested on
+    # the radio, so the release image is the same code
+    container: ubuntu:26.04
+    defaults:
+      run:
+        shell: bash
     steps:
-    - uses: actions/checkout@v4
+    - name: Install toolchain
+      run: |
+        apt-get update -q
+        DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends \
+          gcc-arm-none-eabi libnewlib-arm-none-eabi make python3 curl unzip ca-certificates git zstd
+        arm-none-eabi-gcc --version | head -1
 
-    # Same Arm GNU toolchain as used for development
-    - uses: carlosperate/arm-none-eabi-gcc-action@v1
-      with:
-        release: '14.2.Rel1'
+    - uses: actions/checkout@v4
 
     # The official stock firmware (fonts/icons are extracted from it). make downloads it and checks
     # its sha256; the cache only saves the download between runs.

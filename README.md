@@ -1,5 +1,7 @@
 # G106 open firmware
 
+[![Build firmware](https://github.com/He-no3opbc9l/g106-open/actions/workflows/build.yml/badge.svg)](https://github.com/He-no3opbc9l/g106-open/actions/workflows/build.yml)
+
 **English** | [Русский](README.ru.md)
 
 Open-source firmware for the **G106** HF QRP transceiver, written from scratch in bare-metal C
@@ -50,22 +52,35 @@ Not verified on air yet: mic EQ, compressor, MIC GAIN above +15 dB, AGC SOFT/MED
 Not done yet (stock parity): CW TX (keyer, sidetone, QSK), split, call sign editor, NFM, TX I/Q
 correction and calibration menus, power/SWR metering, CAT protocol, factory reset.
 
+## Download
+
+Ready-made images are built by GitHub Actions: tagged versions on the
+[Releases](https://github.com/He-no3opbc9l/g106-open/releases) page, every commit under
+[Actions](https://github.com/He-no3opbc9l/g106-open/actions) (artifacts). Flash
+`g106_open-<version>.xgf` like an official update (see [Flashing](#flashing)); the `.bin` is for SWD.
+
 ## Building
 
-Requirements: `arm-none-eabi-gcc` (tested with 14.2), GNU make, Python 3 (+ `pyserial` for flashing),
-optionally OpenOCD and an ST-Link for SWD.
+Requirements: `arm-none-eabi-gcc` (tested with 14.2), GNU make, Python 3, `curl`, `unzip`
+(+ `pyserial` for flashing), optionally OpenOCD and an ST-Link for SWD.
 
-1. Download the official firmware **G106 V1.4b01** (`G106Fw-V1.4b01.xgf`) from the manufacturer and put it into
-   `stock/`. It is not part of this repository; the build decrypts it and extracts the original UI
-   fonts and icons from it (`tools/extract_stock_gfx.py`), so no stock graphics are stored in the
-   sources.
-2. `make`
+```
+make
+```
+
+The build needs the official firmware **G106 V1.4b01** (`stock/G106Fw-V1.4b01.xgf`): on the first
+run `make` downloads the official update archive and checks the file's sha256 (offline: put the
+file into `stock/` by hand). It is not part of this repository; the build decrypts it and extracts
+the original UI fonts and icons from it (`tools/extract_stock_gfx.py`), so no stock graphics are
+stored in the sources.
 
 Output: `build/g106_open.elf`, `.bin` (raw image for `0x08020000`) and `.xgf` (encrypted image for
 the bootloader). `make stock` additionally produces `stock/G106Fw-V1.4b01.bin` (decrypted stock app)
 and `stock/G106Fw-V1.4b01.txall.bin` (stock app with the TX band limit removed).
 
 `.xgf` files are plain AES-256-ECB; `tools/xgf.py enc|dec` uses the key in `tools/aes_key.hex`.
+
+Release: push a tag `vX.Y` — the workflow attaches `.xgf`, `.bin`, `.elf` and `SHA256SUMS`.
 
 ## Flashing
 

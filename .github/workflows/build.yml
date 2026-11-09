@@ -1,0 +1,61 @@
+# Builds the firmware on every push and pull request; the images are kept as workflow artifacts.
+# On a tag v*: GitHub release with the .xgf (for the bootloader / IAP), the raw .bin (SWD) and the
+# .elf (debugging).
+name: Build firmware
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+# Write access for the Release step (the default token is read-only)
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+    - uses: actions/checkout@v4
+
+    # Same Arm GNU toolchain as used for development
+    - uses: carlosperate/arm-none-eabi-gcc-action@v1
+      with:
+        release: '14.2.Rel1'
+
+    # The official stock firmware (fonts/icons are extracted from it). make downloads it and checks
+    # its sha256; the cache only saves the download between runs.
+    - name: Cache stock firmware
+      uses: actions/cache@v4
+      with:
+        path: stock/G106Fw-V1.4b01.xgf
+        key: stock-G106Fw-V1.4b01-95bd0b0a
+
+    - name: Build
+      run: make
+
+    # Version in the file names: the tag on a tag, otherwise the short commit
+    - name: Package
+      run: |
+        if [ "${{ github.ref_type }}" = tag ]; then VER=${{ github.ref_name }}; else VER=${GITHUB_SHA::7}; fi
+        echo "VER=$VER" >> $GITHUB_ENV
+        mkdir dist
+        for ext in xgf bin elf; do cp build/g106_open.$ext dist/g106_open-$VER.$ext; done
+        (cd dist && sha256sum * > SHA256SUMS)
+        ls -la dist
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: g106_open-${{ env.VER }}
+        path: dist/*
+        retention-days: 30
+
+    - name: Release
+      if: github.ref_type == 'tag'
+      uses: softprops/action-gh-release@v2
+      with:
+        files: dist/*
+        generate_release_notes: true

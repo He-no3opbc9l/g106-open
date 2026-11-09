@@ -1,5 +1,7 @@
 # G106 open firmware
 
+[![Build firmware](https://github.com/He-no3opbc9l/g106-open/actions/workflows/build.yml/badge.svg)](https://github.com/He-no3opbc9l/g106-open/actions/workflows/build.yml)
+
 [English](README.md) | **Русский**
 
 Открытая прошивка для КВ QRP-трансивера **G106**, написанная с нуля на голом C (без HAL и
@@ -57,15 +59,28 @@ SOFT/MED/OFF.
 редактор позывного, NFM, коррекция TX I/Q и меню калибровки, измерение мощности/КСВ, CAT-протокол,
 сброс к заводским настройкам.
 
+## Скачать
+
+Готовые образы собирает GitHub Actions: версии с тегами — на странице
+[Releases](https://github.com/He-no3opbc9l/g106-open/releases), каждый коммит — в
+[Actions](https://github.com/He-no3opbc9l/g106-open/actions) (artifacts). Файл
+`g106_open-<версия>.xgf` шьётся как официальное обновление (см. [Прошивка](#прошивка)), `.bin` —
+для SWD.
+
 ## Сборка
 
-Нужно: `arm-none-eabi-gcc` (проверено на 14.2), GNU make, Python 3 (+ `pyserial` для прошивки),
-по желанию OpenOCD и ST-Link для SWD.
+Нужно: `arm-none-eabi-gcc` (проверено на 14.2), GNU make, Python 3, `curl`, `unzip`
+(+ `pyserial` для прошивки), по желанию OpenOCD и ST-Link для SWD.
 
-1. Скачайте официальную прошивку **G106 V1.4b01** (`G106Fw-V1.4b01.xgf`) у производителя и положите её в
-   `stock/`. В репозитории её нет; сборка расшифровывает её и достаёт оригинальные шрифты и иконки
-   (`tools/extract_stock_gfx.py`), так что стоковой графики в исходниках нет.
-2. `make`
+```
+make
+```
+
+Для сборки нужна официальная прошивка **G106 V1.4b01** (`stock/G106Fw-V1.4b01.xgf`): при первом
+запуске `make` скачивает официальный архив обновления и проверяет sha256 файла (без интернета —
+положите файл в `stock/` вручную). В репозитории её нет; сборка расшифровывает её и достаёт
+оригинальные шрифты и иконки (`tools/extract_stock_gfx.py`), так что стоковой графики в исходниках
+нет.
 
 Результат: `build/g106_open.elf`, `.bin` (сырой образ для `0x08020000`) и `.xgf` (зашифрованный
 образ для загрузчика). `make stock` дополнительно делает `stock/G106Fw-V1.4b01.bin` (расшифрованное
@@ -74,6 +89,8 @@ SOFT/MED/OFF.
 
 Файлы `.xgf` — это просто AES-256-ECB; `tools/xgf.py enc|dec` использует ключ из
 `tools/aes_key.hex`.
+
+Релиз: запушить тег `vX.Y` — workflow прикрепит `.xgf`, `.bin`, `.elf` и `SHA256SUMS`.
 
 ## Прошивка
 

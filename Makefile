@@ -6,8 +6,11 @@ CC       := arm-none-eabi-gcc
 OBJCOPY  := arm-none-eabi-objcopy
 SIZE     := arm-none-eabi-size
 
-# Official stock firmware (download it from the manufacturer and put it into stock/). Needed at
-# build time: the original UI fonts/icons are extracted from it. Not part of this repository.
+# Official stock firmware, needed at build time: the original UI fonts/icons are extracted from
+# it. Not part of this repository: downloaded from the official update archive on first build
+# (or put G106Fw-V1.4b01.xgf into stock/ by hand), checked by sha256.
+STOCK_URL := https://radioddity.s3.amazonaws.com/2025-07-03_G106_Firmware_update_V1.4.zip
+STOCK_SHA := 95bd0b0adea0027cd75855aa280ad97ee8abd17620786a5e6d2c23f8dc01d113
 STOCK_XGF := stock/G106Fw-V1.4b01.xgf
 STOCK     := stock/G106Fw-V1.4b01.bin
 STOCK_TX  := stock/G106Fw-V1.4b01.txall.bin
@@ -42,7 +45,12 @@ $(STOCK_TX): $(STOCK) tools/patch_txall.py
 stock: $(STOCK) $(STOCK_TX)
 
 $(STOCK_XGF):
-	@echo "missing $@: download the official G106 V1.4b01 firmware and put the .xgf there"; exit 1
+	mkdir -p $(@D)
+	curl -sSLf -o $(@D)/stock.zip $(STOCK_URL)
+	unzip -p $(@D)/stock.zip $(@F) > $@.tmp
+	@echo "$(STOCK_SHA)  $@.tmp" | sha256sum -c --quiet || { rm -f $@.tmp; echo "unexpected $(@F)"; exit 1; }
+	mv $@.tmp $@
+	rm -f $(@D)/stock.zip
 
 # Original UI fonts/icons, extracted from the stock image at build time (not in src/).
 $(BUILD)/stock_gfx.c: $(STOCK) tools/extract_stock_gfx.py | $(BUILD)

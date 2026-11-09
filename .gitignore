@@ -1,0 +1,9 @@
+build/
+__pycache__/
+*.pyc
+
+# Stock firmware images and anything derived from them (download / generate locally)
+stock/
+
+# local reverse-engineering workspace: Ghidra project, decompiled stock code, RAM/EEPROM dumps
+re/

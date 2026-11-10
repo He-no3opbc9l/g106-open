@@ -155,6 +155,16 @@ static float blackman(int n, int len)
     return 0.42f - 0.5f * cosf(2 * PI_F * n / (len - 1)) + 0.08f * cosf(4 * PI_F * n / (len - 1));
 }
 
+/* NFM state (see nfm_demod) */
+#define NFM_DEV     2500.0f
+#define NFM_RX_OUT  0.03f                       /* ~ AGC output level of SSB peaks */
+#define SIN_N       256
+static float sin_tab[SIN_N + 1];                /* one period + guard */
+static float emph_p, emph_norm;                 /* exp(-2 pi 300 / fs), |H| at 1 kHz */
+static float fm_pi, fm_pq, fm_de, nfm_gain = 1.0f;
+static volatile bool nfm_open = true;           /* squelch gate, set by radio.c (S-meter) */
+static float fm_phase, fm_pre_x;
+
 /* Windowed-sinc low-pass, cut-off fc (fraction of fs), unity DC gain. */
 static void design_lpf(float *h, int n, float fc)
 {
@@ -171,6 +181,13 @@ static void design_lpf(float *h, int n, float fc)
 
 static void dsp_init(void)
 {
+    for (int k = 0; k <= SIN_N; k++)
+        sin_tab[k] = sinf(2 * PI_F * k / SIN_N);
+    emph_p = expf(-2 * PI_F * 300.0f / FS2);
+    {   /* |1 - p e^-jw| / (1 - p) at 1 kHz: pre-emphasis gain, de-emphasis 1 / that */
+        float w = 2 * PI_F * 1000.0f / FS2, re = 1 - emph_p * cosf(w), im = emph_p * sinf(w);
+        emph_norm = sqrtf(re * re + im * im) / (1 - emph_p);
+    }
     design_lpf(h_dec, NDEC, 8000.0f / AUDIO_FS);
     /* y48[3n+p] = 3 * sum_k h[p + 3k] * y16[n - k]; window is oldest..newest. */
     for (int p = 0; p < DEC; p++)
@@ -485,6 +502,62 @@ static float am_demod(float i, float q)
     return 2.0f * (env - am_dc);
 }
 
+/* ===================== NFM (own; stock has the mode name but no NFM) =====================
+ * Channel: 16 kHz complex baseband (decimation filter cut-off 8 kHz), i.e. +/-2.5 kHz deviation
+ * + 3 kHz audio (Carson 11 kHz) fits. 6 dB/octave pre-/de-emphasis with the corner at 300 Hz,
+ * both normalised to unity gain at 1 kHz; full deviation at 1 kHz = 1.0 before NFM_RX_OUT. */
+
+/* atan2 with ~0.004 rad error (x (pi/4 + 0.273 (1 - |x|)) on |x| <= 1, octants folded). */
+static inline float fast_atan2(float y, float x)
+{
+    float ax = fabsf(x), ay = fabsf(y);
+    float mx = ax > ay ? ax : ay, mn = ax > ay ? ay : ax;
+    if (mx < 1e-30f)
+        return 0;
+    float t = mn / mx;
+    float a = t * (0.78539816f + 0.273f * (1.0f - t));
+    if (ay > ax)
+        a = 1.57079633f - a;
+    if (x < 0)
+        a = PI_F - a;
+    return y < 0 ? -a : a;
+}
+
+/* sin / cos of 2 pi * ph (ph in cycles, [0, 1)), table + linear interpolation (~1e-4). */
+static inline void fast_sincos(float ph, float *s, float *c)
+{
+    float x = ph * SIN_N;
+    int k = (int)x;
+    float f = x - k;
+    *s = sin_tab[k] + f * (sin_tab[k + 1] - sin_tab[k]);
+    x += SIN_N / 4;
+    if (x >= SIN_N)
+        x -= SIN_N;
+    k = (int)x;
+    f = x - k;
+    *c = sin_tab[k] + f * (sin_tab[k + 1] - sin_tab[k]);
+}
+
+void audio_set_nfm_gate(bool open)
+{
+    nfm_open = open;
+}
+
+/* Quadrature discriminator arg(z[n] conj z[n-1]); the IQ spectrum inversion only flips the
+ * audio polarity. Squelch gate from radio.c with a 5 ms mute ramp. */
+static float nfm_demod(float i, float q)
+{
+    float re = i * fm_pi + q * fm_pq, im = q * fm_pi - i * fm_pq;
+    fm_pi = i;
+    fm_pq = q;
+    float d = fast_atan2(im, re);               /* rad / sample */
+    nfm_gain += ((nfm_open ? 1.0f : 0.0f) - nfm_gain) * 0.0125f;
+
+    float x = d * (FS2 / (2 * PI_F * NFM_DEV));    /* 1.0 = full deviation */
+    fm_de += (x - fm_de) * (1.0f - emph_p);         /* de-emphasis (one pole at 300 Hz) */
+    return bpf_run(fm_de * emph_norm) * nfm_gain * NFM_RX_OUT;
+}
+
 /* One 16 kHz I/Q sample -> one 16 kHz audio sample. */
 static float demod12(audio_mode_t m, float i, float q)
 {
@@ -497,6 +570,8 @@ static float demod12(audio_mode_t m, float i, float q)
         return agc(bq_run(&cw_bq[1], bq_run(&cw_bq[0], ssb_demod(i, q, m == AUDIO_CWR))));
     case AUDIO_AM:
         return agc(bpf_run(am_demod(i, q)));
+    case AUDIO_NFM:
+        return nfm_demod(i, q);
     default:
         return 0;
     }
@@ -658,7 +733,7 @@ static inline void out_sample(volatile uint16_t *p, float x)
 
 /* ===================== TX voice chain =====================
  * 48 kHz: mic (left ADC) or data input (right ADC) -> DC block -> decimate by 3
- * 16 kHz: band-pass 20 Hz .. SSBF (same taps as RX) -> peak limiter (ALC) ->
+ * 16 kHz: band-pass 20 Hz .. FILT (same taps as RX) -> peak limiter (ALC) ->
  *         SSB: I = delayed x, Q = +/- Hilbert(x);  AM: I = Q = carrier + modulation
  * 48 kHz: interpolate I and Q by 3 -> power factor + DC offsets.
  * Full scale: SSB peak envelope = the CW carrier vector (I = Q = 0.045 x power). */
@@ -782,6 +857,11 @@ static void tx16(audio_mode_t m, float x, float *oi, float *oq)
         y = compress(y);
     if (m == AUDIO_TX_AM)
         y *= AM_TX_GAIN;
+    if (m == AUDIO_TX_NFM) {                    /* pre-emphasis (zero at 300 Hz), 1 at 1 kHz */
+        float e = (y - emph_p * fm_pre_x) / ((1 - emph_p) * emph_norm);
+        fm_pre_x = y;
+        y = e;
+    }
     float ay = fabsf(y);
     if (ay > tx_peak)
         tx_peak = ay;
@@ -792,6 +872,14 @@ static void tx16(audio_mode_t m, float x, float *oi, float *oq)
     if (m == AUDIO_TX_AM) {
         float v = 0.5f + 0.45f * y;                          /* carrier 1/2, 90 % modulation */
         *oi = *oq = v * 0.70710678f;
+        return;
+    }
+    if (m == AUDIO_TX_NFM) {                    /* |y| <= 1 -> +/-2.5 kHz; full carrier */
+        fm_phase += y * (NFM_DEV / FS2);
+        fm_phase -= floorf(fm_phase);
+        if (fm_phase >= 1.0f)
+            fm_phase = 0;
+        fast_sincos(fm_phase, oq, oi);
         return;
     }
     thbuf[thpos] = thbuf[thpos + HILB_N] = y;
@@ -876,6 +964,7 @@ static void dsp_state_reset(void)
     for (int k = 0; k < 3; k++)
         eq[k].x1 = eq[k].x2 = eq[k].y1 = eq[k].y2 = 0;
     y12 = am_dc = 0;
+    fm_pi = fm_pq = fm_de = fm_phase = fm_pre_x = 0;
     dc_i = dc_q = prev_i = prev_q = 0;
     iqb_acc0 = iqb_acc1 = iqb_acc2 = iqb_c1 = iqb_c2 = iqb_c3 = iqb_phase = 0;
     iqb_gain = 1.0f;
@@ -889,7 +978,8 @@ static void dsp_state_reset(void)
 static void dsp_check(void)
 {
     const float v[] = {agc_db, agc_peak, agc_env, iqb_gain, iqb_phase, dc_i, dc_q, y12,
-                       am_dc, tx_dc, alc_env, comp_env, cw_bq[1].y1, eq[2].y1};
+                       am_dc, tx_dc, alc_env, comp_env, cw_bq[1].y1, eq[2].y1, fm_de, nfm_gain,
+                       fm_phase};
     for (unsigned k = 0; k < sizeof v / sizeof v[0]; k++)
         if (!isfinite(v[k])) {
             if (!dsp_fault)
@@ -949,6 +1039,7 @@ static void process(const volatile uint16_t *in, volatile uint16_t *out)
         case AUDIO_CW:
         case AUDIO_CWR:
         case AUDIO_AM:
+        case AUDIO_NFM:
             ol = or_ = rx48(m, l, r) * g;
             break;
         case AUDIO_TX_CARRIER:
@@ -959,6 +1050,7 @@ static void process(const volatile uint16_t *in, volatile uint16_t *out)
         case AUDIO_TX_SSB_U:
         case AUDIO_TX_SSB_L:
         case AUDIO_TX_AM:
+        case AUDIO_TX_NFM:
             tx48(m, l, r, &ol, &or_);
             break;
         default:

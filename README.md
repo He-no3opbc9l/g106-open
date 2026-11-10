@@ -26,19 +26,18 @@ Working on the radio:
   build time, see below), tuning, bands, V/M, A/B, memories (MW / MC), VER, message boxes.
 - Stock power key behaviour (short press: backlight, hold 2 s: power-off screen and save).
 - Setting editor: CWF CWT CWR QSK KS KM IMB DIS MG TXP.
-- RX: SSB, CW, AM. 48 kHz I/Q → DC block → adaptive I/Q balance → 16 kHz SSB phasing demodulator
-  (191-tap Hilbert), CW biquad filters, AM envelope, band-pass filter, dB AGC with look-ahead.
+- RX: SSB, CW, AM, NFM. 48 kHz I/Q → DC block → adaptive I/Q balance → 16 kHz SSB phasing demodulator
+  (191-tap Hilbert), CW biquad filters, AM envelope, NFM discriminator with de-emphasis and squelch, band-pass filter, dB AGC with look-ahead.
 - 1024-point FFT spectrum scope with zoom and an FFT-based S-meter.
-- TX: SSB and AM voice via PTT, data input for L-D / U-D (digital modes), carrier / tone for tests.
-- WFM broadcast receiver (built-in FM chip): seek and channels (reception of real stations not
-  verified yet).
+- TX: SSB, AM and NFM voice via PTT, data input for L-D / U-D (digital modes), carrier / tone for tests.
+- WFM broadcast receiver (built-in FM chip): seek and channels.
 - Serial console for debugging and measurements.
 
 Deliberate differences from stock:
 
 | | |
 |---|---|
-| SSBF | RX/TX audio filter 1.8–6.0 kHz, low cut 20 Hz (soft-key page 6) |
+| FILT | RX/TX audio filter, own width per mode group: SSB, DATA (L-D/U-D), AM 2.0–6.0 kHz, NFM 2.0–3.0 kHz; low cut 20 Hz (NFM 300 Hz); in CW it opens CWF (soft-key page 6) |
 | ZOOM | spectrum zoom 1.0–3.0× (page 6) |
 | AGC | OFF / SOFT / MED / HARD (HARD = stock, OFF = fixed gain) (page 6) |
 | MIC GAIN | 0..60 = 0..+30 dB in 0.5 dB steps (stock: 0..30) |
@@ -46,10 +45,9 @@ Deliberate differences from stock:
 | Preamp | global, not per VFO/band |
 | TX switching | 10 ms relay delay + 10 ms ramps, no band limits |
 | AM TX | mic +12 dB before the limiter (≤ 90 % modulation) |
+| NFM | enabled in the MODE cycle (stock lists it but disables it): ±2.5 kHz deviation, 6 dB/oct pre-/de-emphasis; SQL = squelch OFF / 1..30 by the S-meter level (2 dB per step), its threshold is shown as an arrow over the S-meter (page 6) |
 
-Not verified on air yet: mic EQ, compressor, MIC GAIN above +15 dB, AGC SOFT/MED/OFF timing.
-
-Not done yet (stock parity): CW TX (keyer, sidetone, QSK), split, call sign editor, NFM, TX I/Q
+Not done yet (stock parity): CW TX (keyer, sidetone, QSK), split, call sign editor, TX I/Q
 correction and calibration menus, power/SWR metering, CAT protocol, factory reset.
 
 ## Download
@@ -126,7 +124,8 @@ The EEPROM is shared and stays in stock format, so stock starts with your settin
 ## Serial console
 
 USART1, 115200 8N1. `help` lists the commands, e.g. `ver`, `f <hz>`, `mode <0-7>`, `sig`, `astat`
-(DSP load and per-stage cycles), `iqfft`, `tx carrier|usb|lsb [0-2]`, `tx off`, `i2cscan 1|2`,
+(DSP load and per-stage cycles, NFM squelch noise), `iqfft`, `tx carrier|usb|lsb [0-2]`, `tx off`,
+`i2cscan 1|2`, `i2cstat` (I2C1 state and error counters), `vc` (VersaClock registers),
 `eedump <start> <len>`.
 
 ## Repository layout

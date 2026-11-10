@@ -21,12 +21,14 @@ typedef enum {
     AUDIO_CW,       /* USB + band-pass around the CW tone (LO offset by -tone) */
     AUDIO_CWR,      /* LSB + band-pass (LO offset by +tone) */
     AUDIO_AM,       /* envelope |I + jQ|, DC removed, 3 kHz LPF (LO offset +100 Hz) */
+    AUDIO_NFM,      /* FM discriminator, 2.5 kHz deviation, de-emphasis, squelch gate (LO offset +100 Hz) */
     AUDIO_TX_CARRIER,   /* TX test: constant I/Q = carrier at the LO (stock CW TX level) */
     AUDIO_TX_USB,       /* TX test: 1 kHz single tone, upper sideband */
     AUDIO_TX_LSB,       /* TX test: 1 kHz single tone, lower sideband */
     AUDIO_TX_SSB_U,     /* TX voice/data: upper sideband */
     AUDIO_TX_SSB_L,     /* TX voice/data: lower sideband */
     AUDIO_TX_AM,        /* TX AM: carrier + modulation */
+    AUDIO_TX_NFM,       /* TX NFM: pre-emphasis, 2.5 kHz peak deviation, constant carrier */
 } audio_mode_t;
 
 int audio_start(void);          /* I2S + DMA armed; call before codec_init() (codec = clock master) */
@@ -58,7 +60,7 @@ bool audio_spectrum_ready(void);
 void audio_profile(uint32_t out[4]);
 /* NaN/inf guard: number of DSP state resets, first bad variable (1-based index into the list
  * in dsp_check(): agc_db agc_peak agc_env iqb_gain iqb_phase dc_i dc_q y12 am_dc tx_dc alc_env
- * comp_env cw_y eq_y), 0 = never. */
+ * comp_env cw_y eq_y fm_de nfm_gain fm_phase), 0 = never. */
 void audio_dsp_faults(uint32_t *resets, uint32_t *first);
 /* Adaptive RX I/Q balance in use: I gain and Q += phase * I. */
 void audio_iq_balance(float *gain, float *phase);
@@ -77,6 +79,8 @@ enum { AGC_OFF, AGC_SOFT, AGC_MED, AGC_HARD };
 void audio_set_agc(int speed);
 /* SSB/AM receive band-pass (16 kHz FIR, up to 6 kHz), lo..hi Hz; safe to call any time (no glitch). */
 void audio_set_rx_filter(float lo_hz, float hi_hz);
+/* Own: NFM squelch gate (the decision is made in radio.c from the S-meter level). */
+void audio_set_nfm_gate(bool open);
 /* CW band-pass: centre (tone) and bandwidth in Hz. */
 void audio_set_cw_filter(float tone_hz, float bw_hz);
 

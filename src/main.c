@@ -173,8 +173,11 @@ static void report(void)
     uart_putdec(radio_freq());
     uart_puts(" Hz, mode ");
     uart_puts(mn[radio_mode() & 7]);
-    uart_puts(", ssbf ");
-    uart_putdec(ssb_filter_hi * 100);
+    uart_puts(", filt ssb/data/am/nfm ");
+    for (int k = 0; k < FILT_COUNT; k++) {
+        uart_putdec(filt_hi[k] * 100);
+        uart_puts(k < FILT_COUNT - 1 ? "/" : "");
+    }
     uart_puts(" Hz, preamp ");
     uart_putdec(preamp);
     uart_puts("\n");
@@ -215,7 +218,7 @@ static void report(void)
 static void run_command(const char *cmd)
 {
     if (!strcmp(cmd, "help")) {
-        uart_puts("help ver gpio uptime off | lcd <text> | contrast <0-255> | bl on|off | beep <hz> | i2cscan 1|2 | eedump <start> <len>\n"
+        uart_puts("help ver gpio uptime off | lcd <text> | contrast <0-255> | bl on|off | beep <hz> | i2cscan 1|2 | i2cstat | vc | eedump <start> <len>\n"
                   "audio off|tone|mic|iq | vol <0-127> | hp <dB> | gain <x10> | astat\n"
                   "f <hz> | mode <0-7: LSB L-D USB U-D CW CWR NFM AM> | agc <max dB> | sig | iqfft\n"
                   "tx carrier|usb|lsb [0-2] | tx off | report\n");
@@ -249,6 +252,40 @@ static void run_command(const char *cmd)
                 uart_puts(" 0x");
                 uart_puthex(a, 2);
             }
+        uart_puts("\n");
+    } else if (!strcmp(cmd, "vc")) {            /* VersaClock registers 0x00..0x7F */
+        uint8_t r[16];
+        for (unsigned a = 0; a < 0x80; a += 16) {
+            uart_puthex(a, 2);
+            uart_puts(":");
+            if (vc_read(a, r, 16) < 0) {
+                uart_puts(" read FAIL\n");
+                continue;
+            }
+            for (int k = 0; k < 16; k++) {
+                uart_puts(" ");
+                uart_puthex(r[k], 2);
+            }
+            uart_puts("\n");
+        }
+    } else if (!strcmp(cmd, "i2cstat")) {       /* I2C1 registers, failures, re-inits */
+        uint32_t r[4];
+        i2c_regs(I2C_BUS1, r);
+        static const char *const n[4] = {"CR1 ", " CR2 ", " SR1 ", " SR2 "};
+        for (int k = 0; k < 4; k++) {
+            uart_puts(n[k]);
+            uart_puthex(r[k], 4);
+        }
+        uart_puts("\nfails ");
+        uart_putdec(i2c_fails[I2C_BUS1]);
+        uart_puts(" inits ");
+        uart_putdec(i2c_inits[I2C_BUS1]);
+        uart_puts("\nlast fail CR1 ");
+        uart_puthex(i2c_last[I2C_BUS1][0], 4);
+        uart_puts(" SR1 ");
+        uart_puthex(i2c_last[I2C_BUS1][1], 4);
+        uart_puts(" SR2 ");
+        uart_puthex(i2c_last[I2C_BUS1][2], 4);
         uart_puts("\n");
     } else if (!strncmp(cmd, "eedump ", 7)) {
         const char *p = cmd + 7;

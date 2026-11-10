@@ -92,12 +92,16 @@ extern workparams_t wp;
 extern uint8_t fm_channels[NUM_FM_CHANNELS];
 extern vfo_t band_slots[NUM_BAND_SLOTS];
 extern bool preamp;
-extern uint8_t ssb_filter_hi;           /* own setting: SSB/AM RX high cut, 100 Hz units 18..60 */
+/* Own setting FILT: RX/TX audio high cut per mode group, 100 Hz units (SSB / DATA / AM 20..60,
+ * NFM 20..30: wider audio no longer fits the 16 kHz channel at 2.5 kHz deviation). */
+enum { FILT_SSB, FILT_DATA, FILT_AM, FILT_NFM, FILT_COUNT };
+extern uint8_t filt_hi[FILT_COUNT];
 extern uint8_t scope_zoom;              /* own setting: scope zoom x10, 10..30 */
 extern uint8_t mic_eq[3];               /* own setting: mic EQ low/mid/high, dB + 12 (0..24) */
 extern uint8_t comp_level;              /* own setting: speech compressor 0 (off)..10 */
 extern uint8_t mic_gain;                /* own setting: MICPGA 0..60 (0.5 dB), stock MG <= 30 */
 extern uint8_t agc_mode;                /* own setting: AGC_OFF..AGC_HARD (audio.h) */
+extern uint8_t nfm_sql;                 /* own setting: NFM squelch 0 (open)..30, 2 dB steps on the S-meter */
 
 /* Returns 0 if the stock work params were valid (CRC ok), <0 if defaults were used. */
 int settings_load(void);

@@ -5,18 +5,20 @@
  *                 memory mode: next/previous stored channel;
  *                 while the soft-key panel is open it selects the page (1..5)
  *   tune push: open/close the soft-key panel       aux encoder: volume 0..46 (stock curve)
- *   MODE short: next enabled mode (LSB L-D USB U-D CW AM)   MODE long: preamp on/off
+ *   MODE short: next enabled mode (LSB L-D USB U-D CW NFM AM)   MODE long: preamp on/off
  *   BAND-/BAND+ short: band slot (memory mode: channel) down/up   long: step digit left/right
  *   BAND- + BAND+: lock      volume push: PB0 toggle (stock)
  *   F1..F4: soft keys of the current page; the first press only opens the panel (stock);
- *           page 6 (own): SSBF = SSB/AM receive filter, ZOOM = scope zoom 1.0..3.0x,
- *                         AGC = receive AGC speed OFF / SOFT / MED / HARD (stock)
+ *           page 6 (own): FILT = RX/TX audio filter of the current mode (SSB, DATA, AM 2.0..6.0 kHz,
+ *                         NFM 2.0..3.0 kHz; CW opens CWF), ZOOM = scope zoom 1.0..3.0x,
+ *                         AGC = receive AGC speed OFF / SOFT / MED / HARD (stock),
+ *                         SQL = NFM squelch OFF / 1..30 (S-meter threshold, arrow on the meter)
  *           page 7 (own): LOW / MID / HIGH = mic equaliser, COMP = speech compressor
  *                         (TX, microphone only)
  *   WFM (page 5 F1, stock 0x08033990): broadcast FM 87..108 MHz on the FM chip, see fm_key()
  *   dialogs: MW / MC (QUIT = F1, SAVE / CLR = F4, tune encoder = channel), VER, message box,
  *            setting editor (stock 0x080313a0: QUIT = F1, SAVE = F4 or tune push)
- * Deviation from stock: the preamp is global, not per VFO/band. */
+ * Deviations from stock: the preamp is global, not per VFO/band; NFM (RX + TX) is enabled. */
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
@@ -54,7 +56,8 @@ typedef struct {
                                        "%k" = value in 100 Hz shown as kHz with one decimal,
                                        "%z" = value x10 shown as a zoom factor "2.5x",
                                        "%e" = EQ value 0..24 shown as -12..+12 dB,
-                                       "%h" = value in 0.5 dB shown as "12.5dB" */
+                                       "%h" = value in 0.5 dB shown as "12.5dB",
+                                       "%o" = number, 0 shown as "OFF" */
     const char *const *names;       /* value names indexed by value */
     void *var;
     uint8_t size;                   /* 1, 2 = int16 */
@@ -87,8 +90,12 @@ static const setting_t set_disp = {0, 2, "DISP:", NULL, disp_names,
 /* MG: stock 0..30 (MICPGA 0..15 dB), ours up to 60 = +30 dB; param2 keeps min(v, 30). */
 static const setting_t set_mic_gain = {0, 60, "MIC GAIN:", "%h", NULL, &mic_gain, 1, ST_OWN};
 /* Own (not in stock): SSB/AM receive high cut, 1.8..6.0 kHz in 0.1 kHz steps. */
-static const setting_t set_ssb_flt = {18, 60, "SSB FLT:", "%k", NULL,
-                                      &ssb_filter_hi, 1, ST_OWN};
+static const setting_t set_filt[FILT_COUNT] = {
+    {20, 60, "FILT SSB:", "%k", NULL, &filt_hi[FILT_SSB], 1, ST_OWN},
+    {20, 60, "FILT DATA:", "%k", NULL, &filt_hi[FILT_DATA], 1, ST_OWN},
+    {20, 60, "FILT AM:", "%k", NULL, &filt_hi[FILT_AM], 1, ST_OWN},
+    {20, 30, "FILT NFM:", "%k", NULL, &filt_hi[FILT_NFM], 1, ST_OWN},
+};
 /* Own: scope zoom around the centre, 1.0x..3.0x in 0.1x steps. */
 static const setting_t set_zoom = {10, 30, "ZOOM:", "%z", NULL, &scope_zoom, 1, ST_OWN};
 /* Own: mic equaliser bands, -12..+12 dB (stored +12). */
@@ -100,13 +107,16 @@ static const setting_t set_comp = {0, 10, "COMP:", NULL, comp_names, &comp_level
 /* Own: receive AGC speed (HARD = stock). */
 static const char *const agc_names[] = {"OFF ", "SOFT", "MED ", "HARD"};
 static const setting_t set_agc = {AGC_OFF, AGC_HARD, "AGC:", NULL, agc_names, &agc_mode, 1, ST_OWN};
+/* Own: NFM squelch (stock has no NFM): opens when the S-meter level reaches nfm_sql x 2 dB
+ * (3 steps per S unit: 24 = S9, 30 = S9+12); shown as an arrow over the S-meter. */
+static const setting_t set_sql = {0, 30, "NFM SQL:", "%o", NULL, &nfm_sql, 1, ST_OWN};
 static const setting_t set_tx_power = {0, 2, "TX POWER:", NULL, txp_names,
                                        &wp.dsp_opt, 2, ST_WORKPARAMS};
 
 static const char *const mode_names[MODE_COUNT] = {"LSB", "L-D", "USB", "U-D", "CW ", "CWR",
                                                    "NFM", "AM "};
-/* Stock mode table 0x08038a54: CWR and NFM are disabled for the MODE key. */
-static const bool mode_enabled[MODE_COUNT] = {1, 1, 1, 1, 1, 0, 0, 1};
+/* Stock mode table 0x08038a54 disables CWR and NFM for the MODE key; NFM is ours. */
+static const bool mode_enabled[MODE_COUNT] = {1, 1, 1, 1, 1, 0, 1, 1};
 
 /* Soft keys (stock table 0x08038c44): labels per page; actions in softkey(). */
 #define NUM_PAGES 7                     /* stock has 5; pages 6-7 are ours */
@@ -116,7 +126,7 @@ static const char *const softkey_labels[NUM_PAGES][4] = {
     {"KS", "KM", "IMB", "CSN"},
     {"SPL", "DIS", "BP", "VER"},
     {"WFM", "BSM", "MG", "TXP"},
-    {"SSBF", "ZOOM", "AGC", ""},
+    {"FILT", "ZOOM", "AGC", "SQL"},
     {"LOW", "MID", "HIGH", "COMP"},
 };
 static const char *const mw_labels[4] = {"QUIT", " ", " ", "SAVE"};   /* stock 0x08038d04 */
@@ -190,7 +200,8 @@ static void apply_pb0(void)
     GPIOB->MODER = (GPIOB->MODER & ~3u) | 1u;
 }
 
-/* LO offset per mode in RX, as stock radio_trx_task: CW -tone, CWR +tone, AM +100 Hz. */
+/* LO offset per mode in RX, as stock radio_trx_task: CW -tone, CWR +tone, AM +100 Hz;
+ * NFM (own) +100 Hz too, so an unmodulated carrier is not taken out by the DC block. */
 static bool txing;
 
 static int32_t lo_offset(void)
@@ -200,7 +211,8 @@ static int32_t lo_offset(void)
     switch (cur()->mode) {
     case MODE_CW: return -stock_settings.cw_tone;
     case MODE_CWR: return stock_settings.cw_tone;
-    case MODE_AM: return 100;
+    case MODE_AM:
+    case MODE_NFM: return 100;
     default: return 0;
     }
 }
@@ -208,16 +220,29 @@ static int32_t lo_offset(void)
 static void apply_freq(void);
 static void fm_enter(void);
 
+/* FILT group of a mode, -1 for CW / CWR (they use CWF; the band-pass is not in their chain). */
+static int filt_group(int mode)
+{
+    switch (mode) {
+    case MODE_LSB: case MODE_USB: return FILT_SSB;
+    case MODE_LD: case MODE_UD: return FILT_DATA;
+    case MODE_AM: return FILT_AM;
+    case MODE_NFM: return FILT_NFM;
+    default: return -1;
+    }
+}
+
 static void apply_mode(void)
 {
-    /* NFM is not implemented yet (disabled in stock's MODE table too): USB for now. */
     static const int demod[MODE_COUNT] = {AUDIO_LSB, AUDIO_LSB, AUDIO_USB, AUDIO_USB,
-                                          AUDIO_CW, AUDIO_CWR, AUDIO_USB, AUDIO_AM};
+                                          AUDIO_CW, AUDIO_CWR, AUDIO_NFM, AUDIO_AM};
     static const float cw_bw[3] = {50, 250, 500};
     codec_route_rx_iq();
     audio_set_gain(1.0f);
     audio_set_cw_filter(stock_settings.cw_tone, cw_bw[stock_settings.cw_filter]);
-    audio_set_rx_filter(20, ssb_filter_hi * 100.0f);     /* own: 20 Hz .. SSBF (RX and TX) */
+    /* Own FILT per mode group (RX and TX share the taps); NFM from 300 Hz: no CTCSS hum. */
+    int fg = filt_group(cur()->mode);
+    audio_set_rx_filter(fg == FILT_NFM ? 300 : 20, (fg < 0 ? filt_hi[FILT_SSB] : filt_hi[fg]) * 100.0f);
     audio_set_mode(demod[cur()->mode]);
     apply_freq();                       /* LO offset depends on the mode */
 }
@@ -368,7 +393,7 @@ int radio_tx_start(int signal, int power_idx)
     audio_tx_ramp(true);
     txing = true;
     tx_until = signal == AUDIO_TX_SSB_U || signal == AUDIO_TX_SSB_L || signal == AUDIO_TX_AM
-             ? 0 : millis() + TX_TIMEOUT_MS;     /* timeout only for console test signals */
+            || signal == AUDIO_TX_NFM ? 0 : millis() + TX_TIMEOUT_MS;     /* timeout only for console test signals */
     dirty = true;
     return 0;
 }
@@ -481,6 +506,37 @@ static void draw_main_freq(uint32_t f, int hl)
     }
 }
 
+/* NFM squelch threshold on the S-meter scale (0..100 = -121..-21 dBm), 0 = off. */
+static int sql_level(void)
+{
+    return cur()->mode == MODE_NFM && nfm_sql ? nfm_sql * 2 : 0;
+}
+
+/* NFM squelch gate from the FFT S-meter level of each new scope frame (~40 ms): opens at the
+ * threshold, closes 3 dB below it after a 150 ms hang (no chopping on short fades). */
+static void squelch_poll(bool fresh, uint32_t now)
+{
+    static bool open = true;
+    static uint32_t below_since;
+    int thr = sql_level();
+    if (!thr || txing) {
+        open = true;
+        below_since = 0;
+    } else if (fresh) {
+        float lvl = spectrum_dbm() + 121.0f;
+        if (lvl >= thr) {
+            open = true;
+            below_since = 0;
+        } else if (lvl < thr - 3) {
+            if (!below_since)
+                below_since = now | 1;
+            else if (now - below_since >= 150)
+                open = false;
+        }
+    }
+    audio_set_nfm_gate(open);
+}
+
 /* Stock S-meter 0x0802f848: dBm (FFT based, see spectrum.c) clamped to -121..-21, smoothed
  * (attack 0.5, decay 0.05) to a 0..100 level; S0 = -121 dBm, 6 dB per S unit, S9 = 48;
  * bar x 25.., peak held 50 frames; the scale text follows the held peak. */
@@ -510,6 +566,12 @@ static void draw_smeter(void)
     if (smeter_peak > 0)
         for (int y = 42; y <= 46; y++)
             lcd_pixel(25 + smeter_peak, y, true);
+    int sql = sql_level();
+    if (sql) {                          /* own: NFM squelch arrow (pointing down) over the bar */
+        for (int dx = -1; dx <= 1; dx++)
+            lcd_pixel(25 + sql + dx, 40, true);
+        lcd_pixel(25 + sql, 41, true);
+    }
 
     char t[8];
     if (shown < 1)
@@ -635,7 +697,7 @@ static void setting_set(const setting_t *s, int v)
         *(uint8_t *)s->var = v;
     else
         *(int16_t *)s->var = v;
-    if (s == &set_cw_tone || s == &set_cw_flt || s == &set_ssb_flt)
+    if (s == &set_cw_tone || s == &set_cw_flt || (s >= set_filt && s < set_filt + FILT_COUNT))
         apply_mode();                   /* DSP filters follow the filter settings */
     if (s == &set_eq_low || s == &set_eq_mid || s == &set_eq_high)
         audio_set_mic_eq(mic_eq[0] - 12, mic_eq[1] - 12, mic_eq[2] - 12);
@@ -685,6 +747,8 @@ static void draw_edit(bool blink)
         snprintf(v, sizeof v, "%d.%dx", edit_value / 10, edit_value % 10);
     else if (!strcmp(edit->fmt, "%e"))
         snprintf(v, sizeof v, "%+ddB", edit_value - 12);
+    else if (!strcmp(edit->fmt, "%o"))
+        snprintf(v, sizeof v, edit_value ? "%d" : "OFF", edit_value);
     else if (!strcmp(edit->fmt, "%h"))
         snprintf(v, sizeof v, "%d.%ddB", edit_value / 2, edit_value % 2 * 5);
     else
@@ -764,10 +828,14 @@ static void softkey(int k, bool lng)
     case 13: open_edit(&set_disp); break;         /* DIS */
     case 18: open_edit(&set_mic_gain); break;     /* MG */
     case 19: open_edit(&set_tx_power); break;     /* TXP */
-    case 20: open_edit(&set_ssb_flt); break;      /* SSBF (own page 6) */
+    case 20: {                                    /* FILT (own page 6): current mode's filter */
+        int fg = filt_group(cur()->mode);
+        open_edit(fg < 0 ? &set_cw_flt : &set_filt[fg]);
+        break;
+    }
     case 21: open_edit(&set_zoom); break;         /* ZOOM (own page 6) */
     case 22: open_edit(&set_agc); break;          /* AGC (own page 6) */
-    case 23: break;                               /* page 6: free */
+    case 23: open_edit(&set_sql); break;          /* SQL (own page 6) */
     case 24: open_edit(&set_eq_low); break;       /* page 7: mic EQ */
     case 25: open_edit(&set_eq_mid); break;
     case 26: open_edit(&set_eq_high); break;
@@ -1000,6 +1068,8 @@ static void draw(void)
         break;
     case UI_EDIT:
         draw_edit(blink);
+        if (edit == &set_sql)
+            draw_smeter();              /* own: the squelch arrow moves while editing */
         break;
     default:
         if (memory_mode())
@@ -1162,7 +1232,7 @@ void radio_poll(void)
     if (txing && tx_until && (int32_t)(now - tx_until) >= 0)
         radio_tx_stop();                /* safety timeout (console test signals) */
 
-    /* PTT (PC2, active low, 20 ms debounce): voice/data TX in SSB and AM modes. No band
+    /* PTT (PC2, active low, 20 ms debounce): voice/data TX in SSB, AM and NFM. No band
      * limits (user choice; stock allows ham bands only). CW keying: TODO. */
     static uint32_t ptt_since;
     static bool ptt_state;
@@ -1174,8 +1244,8 @@ void radio_poll(void)
             ptt_state = ptt_raw;
             ptt_since = 0;
             int m = cur()->mode;
-            if (ptt_state && !txing && state == UI_MAIN && m != MODE_CW && m != MODE_CWR && m != MODE_NFM) {
-                int sig = m == MODE_AM ? AUDIO_TX_AM
+            if (ptt_state && !txing && state == UI_MAIN && m != MODE_CW && m != MODE_CWR) {
+                int sig = m == MODE_AM ? AUDIO_TX_AM : m == MODE_NFM ? AUDIO_TX_NFM
                         : (m == MODE_USB || m == MODE_UD) ? AUDIO_TX_SSB_U : AUDIO_TX_SSB_L;
                 radio_tx_start(sig, -1);
             } else if (!ptt_state && txing && !tx_until) {
@@ -1209,6 +1279,7 @@ void radio_poll(void)
     }
 
     bool fresh = spectrum_poll(cur()->mode, disp_mode, preamp, scope_zoom / 10.0f, txing);
+    squelch_poll(fresh, now);
     if (dirty || (fresh && now - last_draw >= 40) || now - last_draw >= 200) {
         dirty = false;
         last_draw = now;

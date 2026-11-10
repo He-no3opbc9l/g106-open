@@ -56,7 +56,8 @@ correction and calibration menus, power/SWR metering, CAT protocol, factory rese
 
 Ready-made images are built by GitHub Actions: tagged versions on the
 [Releases](https://github.com/He-no3opbc9l/g106-open/releases) page, every commit under
-[Actions](https://github.com/He-no3opbc9l/g106-open/actions) (artifacts). Flash
+[Actions](https://github.com/He-no3opbc9l/g106-open/actions) (artifacts). The release zip
+holds the images; flash
 `g106_open-<version>.xgf` like an official update (see [Flashing](#flashing)); the `.bin` is for SWD.
 
 ## Building
@@ -80,7 +81,7 @@ and `stock/G106Fw-V1.4b01.txall.bin` (stock app with the TX band limit removed).
 
 `.xgf` files are plain AES-256-ECB; `tools/xgf.py enc|dec` uses the key in `tools/aes_key.hex`.
 
-Release: push a tag `vX.Y` — the workflow attaches `.xgf`, `.bin`, `.elf` and `SHA256SUMS`.
+Release: push a tag `vX.Y` — the workflow attaches `g106_open-vX.Y.zip` with the `.xgf`, `.bin` and `.elf`.
 
 ## Flashing
 

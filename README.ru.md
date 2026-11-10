@@ -63,7 +63,8 @@ SOFT/MED/OFF.
 
 Готовые образы собирает GitHub Actions: версии с тегами — на странице
 [Releases](https://github.com/He-no3opbc9l/g106-open/releases), каждый коммит — в
-[Actions](https://github.com/He-no3opbc9l/g106-open/actions) (artifacts). Файл
+[Actions](https://github.com/He-no3opbc9l/g106-open/actions) (artifacts). В zip
+релиза лежат образы; файл
 `g106_open-<версия>.xgf` шьётся как официальное обновление (см. [Прошивка](#прошивка)), `.bin` —
 для SWD.
 
@@ -90,7 +91,7 @@ make
 Файлы `.xgf` — это просто AES-256-ECB; `tools/xgf.py enc|dec` использует ключ из
 `tools/aes_key.hex`.
 
-Релиз: запушить тег `vX.Y` — workflow прикрепит `.xgf`, `.bin`, `.elf` и `SHA256SUMS`.
+Релиз: запушить тег `vX.Y` — workflow прикрепит `g106_open-vX.Y.zip` с `.xgf`, `.bin` и `.elf`.
 
 ## Прошивка
 

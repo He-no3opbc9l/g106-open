@@ -1,6 +1,6 @@
 # Builds the firmware on every push and pull request; the images are kept as workflow artifacts.
-# On a tag v*: GitHub release with the .xgf (for the bootloader / IAP), the raw .bin (SWD) and the
-# .elf (debugging).
+# On a tag v*: GitHub release with one zip holding the .xgf (for the bootloader / IAP), the raw .bin
+# (SWD) and the .elf (debugging).
 name: Build firmware
 
 on:
@@ -28,7 +28,7 @@ jobs:
       run: |
         apt-get update -q
         DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends \
-          gcc-arm-none-eabi libnewlib-arm-none-eabi make python3 curl unzip ca-certificates git zstd
+          gcc-arm-none-eabi libnewlib-arm-none-eabi make python3 curl unzip zip ca-certificates git zstd
         arm-none-eabi-gcc --version | head -1
 
     - uses: actions/checkout@v4
@@ -52,7 +52,8 @@ jobs:
         mkdir dist
         for ext in xgf bin elf; do cp build/g106_open.$ext dist/g106_open-$VER.$ext; done
         (cd dist && sha256sum * > SHA256SUMS)
-        ls -la dist
+        zip -j g106_open-$VER.zip dist/g106_open-$VER.*
+        ls -la dist g106_open-$VER.zip
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
@@ -65,5 +66,5 @@ jobs:
       if: github.ref_type == 'tag'
       uses: softprops/action-gh-release@v2
       with:
-        files: dist/*
+        files: g106_open-${{ env.VER }}.zip
         generate_release_notes: true

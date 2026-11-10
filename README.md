@@ -79,8 +79,6 @@ and `stock/G106Fw-V1.4b01.txall.bin` (stock app with the TX band limit removed).
 
 `.xgf` files are plain AES-256-ECB; `tools/xgf.py enc|dec` uses the key in `tools/aes_key.hex`.
 
-Release: push a tag `vX.Y` — the workflow attaches `g106_open-vX.Y.zip` with the `.xgf`, `.bin` and `.elf`.
-
 ## Flashing
 
 ### Via the stock bootloader (IAP, only a USB-UART adapter)

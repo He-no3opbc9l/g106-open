@@ -89,8 +89,6 @@ make
 Файлы `.xgf` — это просто AES-256-ECB; `tools/xgf.py enc|dec` использует ключ из
 `tools/aes_key.hex`.
 
-Релиз: запушить тег `vX.Y` — workflow прикрепит `g106_open-vX.Y.zip` с `.xgf`, `.bin` и `.elf`.
-
 ## Прошивка
 
 ### Через стоковый загрузчик (IAP, нужен только USB-UART)

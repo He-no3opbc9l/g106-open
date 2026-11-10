@@ -7,5 +7,6 @@
 
 int vc_init(void);
 int vc_set_output(int ch, uint32_t freq_hz);
+int vc_read(uint8_t reg, uint8_t *buf, unsigned n);   /* diagnostics (console `vc`) */
 
 #endif

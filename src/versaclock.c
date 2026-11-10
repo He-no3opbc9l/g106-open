@@ -53,6 +53,11 @@ int vc_init(void)
     return resync();
 }
 
+int vc_read(uint8_t reg, uint8_t *buf, unsigned n)
+{
+    return i2c_write_read(I2C_BUS1, VC_ADDR, &reg, 1, buf, n);
+}
+
 /* f_out = f_vco / (2 * (int + frac / 2^24)); packing identical to stock (0x080312a0). */
 int vc_set_output(int ch, uint32_t freq_hz)
 {

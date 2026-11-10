@@ -63,6 +63,7 @@ static void bus_recover(const bus_t *b)
 void i2c_init(int bus)
 {
     const bus_t *b = &buses[bus];
+    i2c_inits[bus]++;
     RCC->AHB1ENR |= RCC_AHB1ENR_GPIOB;
     RCC->APB1ENR |= 1u << b->rcc_bit;
     __dsb();
@@ -95,18 +96,50 @@ static bool wait_flag(I2C_TypeDef *i2c, uint32_t flag)
     return true;
 }
 
+uint32_t i2c_fails[3], i2c_inits[3], i2c_last[3][3];
+
+void i2c_regs(int bus, uint32_t r[4])
+{
+    I2C_TypeDef *i2c = buses[bus].i2c;
+    r[0] = i2c->CR1;
+    r[1] = i2c->CR2;
+    r[2] = i2c->SR1;
+    r[3] = i2c->SR2;
+}
+
 static int fail(int bus)
 {
     I2C_TypeDef *i2c = buses[bus].i2c;
-    i2c->CR1 |= CR1_STOP;
-    i2c->SR1 = 0;
-    if (i2c->SR2 & (1u << 1))           /* still BUSY: reset the peripheral */
-        i2c_init(bus);
+    i2c_fails[bus]++;
+    i2c_last[bus][0] = i2c->CR1;
+    i2c_last[bus][1] = i2c->SR1;
+    i2c_last[bus][2] = i2c->SR2;
+    /* Always a full reset: SWRST drops a pending START/STOP (a STOP requested on an idle bus is
+     * never executed and blocks every later START - the "LO stops following the dial" hang) and
+     * bus_recover() frees a slave that holds SDA. */
+    i2c_init(bus);
     return -1;
+}
+
+/* Request a STOP and wait until the hardware has executed it (CR1.STOP clears). RM0090: CR1 must
+ * not be written while STOP/START is pending - the next transaction's read-modify-write of CR1
+ * could write a STOP back that the hardware has just cleared. */
+static bool stop(I2C_TypeDef *i2c)
+{
+    i2c->CR1 |= CR1_STOP;
+    uint32_t t0 = millis();
+    while (i2c->CR1 & CR1_STOP)
+        if (millis() - t0 > TIMEOUT_MS)
+            return false;
+    return true;
 }
 
 static bool start(I2C_TypeDef *i2c, uint8_t addr8)
 {
+    uint32_t t0 = millis();
+    while (i2c->SR2 & (1u << 1))        /* BUSY: previous STOP not on the bus yet */
+        if (millis() - t0 > TIMEOUT_MS)
+            return false;
     i2c->CR1 |= CR1_START;
     if (!wait_flag(i2c, SR1_SB))
         return false;
@@ -120,9 +153,8 @@ static bool start(I2C_TypeDef *i2c, uint8_t addr8)
 int i2c_probe(int bus, uint8_t addr)
 {
     I2C_TypeDef *i2c = buses[bus].i2c;
-    if (!start(i2c, addr << 1))
+    if (!start(i2c, addr << 1) || !stop(i2c))
         return fail(bus);
-    i2c->CR1 |= CR1_STOP;
     return 0;
 }
 
@@ -139,9 +171,8 @@ static bool send(I2C_TypeDef *i2c, const uint8_t *p, unsigned n)
 int i2c_write(int bus, uint8_t addr, const uint8_t *data, unsigned len)
 {
     I2C_TypeDef *i2c = buses[bus].i2c;
-    if (!start(i2c, addr << 1) || !send(i2c, data, len))
+    if (!start(i2c, addr << 1) || !send(i2c, data, len) || !stop(i2c))
         return fail(bus);
-    i2c->CR1 |= CR1_STOP;
     return 0;
 }
 
@@ -150,10 +181,8 @@ int i2c_write_read(int bus, uint8_t addr, const uint8_t *w, unsigned wlen, uint8
     I2C_TypeDef *i2c = buses[bus].i2c;
     if (wlen && (!start(i2c, addr << 1) || !send(i2c, w, wlen)))
         return fail(bus);
-    if (!rlen) {
-        i2c->CR1 |= CR1_STOP;
-        return 0;
-    }
+    if (!rlen)
+        return stop(i2c) ? 0 : fail(bus);
 
     i2c->CR1 |= CR1_ACK;
     i2c->CR1 |= CR1_START;
@@ -162,14 +191,16 @@ int i2c_write_read(int bus, uint8_t addr, const uint8_t *w, unsigned wlen, uint8
     i2c->DR = (addr << 1) | 1;
     if (!wait_flag(i2c, SR1_ADDR))
         return fail(bus);
-    if (rlen == 1)
+    bool last = rlen == 1;
+    if (last)
         i2c->CR1 &= ~CR1_ACK;
     (void)i2c->SR2;
-    if (rlen == 1)
+    if (last)
         i2c->CR1 |= CR1_STOP;
 
     while (rlen) {
-        if (rlen == 1) {
+        if (rlen == 1 && !last) {
+            last = true;
             /* Last byte is now being received: NACK it and STOP afterwards. */
             i2c->CR1 &= ~CR1_ACK;
             i2c->CR1 |= CR1_STOP;
@@ -179,5 +210,9 @@ int i2c_write_read(int bus, uint8_t addr, const uint8_t *w, unsigned wlen, uint8
         *r++ = i2c->DR;
         rlen--;
     }
+    uint32_t t0 = millis();
+    while (i2c->CR1 & CR1_STOP)         /* see stop() */
+        if (millis() - t0 > TIMEOUT_MS)
+            return fail(bus);
     return 0;
 }

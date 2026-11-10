@@ -15,4 +15,9 @@ int i2c_write(int bus, uint8_t addr, const uint8_t *data, unsigned len);
 /* Write `wlen` bytes (e.g. register address), repeated start, read `rlen` bytes. */
 int i2c_write_read(int bus, uint8_t addr, const uint8_t *w, unsigned wlen, uint8_t *r, unsigned rlen);
 
+/* Diagnostics: CR1 CR2 SR1 SR2 now; failures and (re-)inits per bus, CR1 SR1 SR2 at the last
+ * failure (every failure resets the peripheral). */
+void i2c_regs(int bus, uint32_t r[4]);
+extern uint32_t i2c_fails[3], i2c_inits[3], i2c_last[3][3];
+
 #endif

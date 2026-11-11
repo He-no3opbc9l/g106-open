@@ -1,12 +1,19 @@
-/* USART1 on PA9 (TX) / PA10 (RX), AF7. Polled TX, interrupt-driven RX ring. */
+/* USART1 on PA9 (TX) / PA10 (RX), AF7: the CAT port. Interrupt-driven RX and TX rings, so a
+ * reply never blocks the main loop (a CI-V answer at 19200 baud takes several ms). */
 #include "stm32f4.h"
 #include "system.h"
 #include "uart.h"
 
 #define RX_SIZE 128
+#define TX_SIZE 128
 
-static volatile uint8_t rx_buf[RX_SIZE];
-static volatile uint32_t rx_head, rx_tail;
+#define SR_RXNE (1u << 5)
+#define SR_ORE  (1u << 3)
+#define SR_TXE  (1u << 7)
+#define CR1_TXEIE (1u << 7)
+
+static volatile uint8_t rx_buf[RX_SIZE], tx_buf[TX_SIZE];
+static volatile uint32_t rx_head, rx_tail, tx_head, tx_tail;
 
 void uart_init(uint32_t baud)
 {
@@ -32,12 +39,20 @@ void uart_init(uint32_t baud)
 void USART1_IRQHandler(void)
 {
     uint32_t sr = USART1->SR;
-    if (sr & ((1u << 5) | (1u << 3))) {     /* RXNE or ORE: reading DR clears both */
+    if (sr & (SR_RXNE | SR_ORE)) {          /* reading DR clears both */
         uint8_t c = USART1->DR;
         uint32_t next = (rx_head + 1) % RX_SIZE;
         if (next != rx_tail) {
             rx_buf[rx_head] = c;
             rx_head = next;
+        }
+    }
+    if ((sr & SR_TXE) && (USART1->CR1 & CR1_TXEIE)) {
+        if (tx_tail == tx_head) {
+            USART1->CR1 &= ~CR1_TXEIE;
+        } else {
+            USART1->DR = tx_buf[tx_tail];
+            tx_tail = (tx_tail + 1) % TX_SIZE;
         }
     }
 }
@@ -51,36 +66,16 @@ int uart_getc(void)
     return c;
 }
 
-void uart_putc(char c)
+void uart_write(const uint8_t *p, unsigned n)
 {
-    while (!(USART1->SR & (1u << 7)))       /* TXE */
-        ;
-    USART1->DR = (uint8_t)c;
-}
-
-void uart_puts(const char *s)
-{
-    while (*s) {
-        if (*s == '\n')
-            uart_putc('\r');
-        uart_putc(*s++);
+    while (n--) {
+        uint32_t next = (tx_head + 1) % TX_SIZE;
+        while (next == tx_tail)             /* full: wait for the ISR */
+            ;
+        tx_buf[tx_head] = *p++;
+        tx_head = next;
+        /* The ISR only clears TXEIE, and only with the ring empty: if it does so inside this
+         * read-modify-write, TXEIE comes back set and the ISR just clears it again. */
+        USART1->CR1 |= CR1_TXEIE;
     }
-}
-
-void uart_puthex(uint32_t v, int digits)
-{
-    while (digits--)
-        uart_putc("0123456789ABCDEF"[(v >> (4 * digits)) & 0xF]);
-}
-
-void uart_putdec(uint32_t v)
-{
-    char buf[11];
-    int i = 0;
-    do {
-        buf[i++] = '0' + v % 10;
-        v /= 10;
-    } while (v);
-    while (i)
-        uart_putc(buf[--i]);
 }

@@ -31,7 +31,7 @@ Working on the radio:
 - 1024-point FFT spectrum scope with zoom and an FFT-based S-meter.
 - TX: SSB, AM and NFM voice via PTT, data input for L-D / U-D (digital modes), carrier / tone for tests.
 - WFM broadcast receiver (built-in FM chip): seek and channels.
-- Serial console for debugging and measurements.
+- CAT: Icom CI-V protocol on USART1 like stock (19200 8N1), see [CAT](#cat).
 
 Deliberate differences from stock:
 
@@ -48,7 +48,7 @@ Deliberate differences from stock:
 | NFM | enabled in the MODE cycle (stock lists it but disables it): ±2.5 kHz deviation, 6 dB/oct pre-/de-emphasis; SQL = squelch OFF / 1..30 by the S-meter level (2 dB per step), its threshold is shown as an arrow over the S-meter (page 6) |
 
 Not done yet (stock parity): CW TX (keyer, sidetone, QSK), split, call sign editor, TX I/Q
-correction and calibration menus, power/SWR metering, CAT protocol, factory reset.
+correction and calibration menus, power/SWR metering, factory reset.
 
 ## Download
 
@@ -119,12 +119,18 @@ OpenOCD session.
 
 The EEPROM is shared and stays in stock format, so stock starts with your settings.
 
-## Serial console
+## CAT
 
-USART1, 115200 8N1. `help` lists the commands, e.g. `ver`, `f <hz>`, `mode <0-7>`, `sig`, `astat`
-(DSP load and per-stage cycles, NFM squelch noise), `iqfft`, `tx carrier|usb|lsb [0-2]`, `tx off`,
-`i2cscan 1|2`, `i2cstat` (I2C1 state and error counters), `vc` (VersaClock registers),
-`eedump <start> <len>`.
+Same as stock: Icom CI-V on USART1 (the port used for IAP), **19200 8N1**, no echo, any CI-V
+address is accepted, the transceiver ID (`19 00`) is `0x70`. In programs choose an Icom CI-V rig
+(e.g. IC-7000 / Xiegu profiles with address 0x70), 19200 baud, PTT via CAT. A "C" icon at the
+top of the screen shows that CAT frames are coming in.
+
+Supported: frequency and mode (`03`/`05`, `04`/`06`, also of VFO A/B via `25`/`26`), data mode
+L-D/U-D (`1A 06`), VFO A/B, A=B, swap (`07`), PTT (`1C 00`), S-meter (`15 02`), volume (`14 01`),
+TX power LOW/MID/HIGH (`14 0A`), preamp (`16 02`), lock (`16 50`), filter width (`1A 03`), band
+edges (`02`). Split is not implemented yet. CAT PTT is dropped if no frame arrives for 60 s. The
+full list with deviations from stock is at the top of `src/cat.c`.
 
 ## Repository layout
 

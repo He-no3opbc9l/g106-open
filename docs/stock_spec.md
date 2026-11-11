@@ -232,3 +232,37 @@ Stock AM TX (DMA ISR, mode 7, 48 kHz, no decimation): mic sample -> 4-biquad ban
 (0x08038914, +6 dB, cut ~4.5 kHz) -> x 0.05 x 0.495 -> I = Q, x power. No limiter / ALC:
 modulation = 1.8 x the raw mic sample (100 % at mic 0.28 FS), carrier 0.0248 FS x power.
 Shift registers (filters) need slow bit-banging (~1 µs per phase).
+
+## CAT (CI-V)
+
+- USART1 19200 8N1 (init 0x08026788 at the end of boot), RX DMA2 S2 circular 100 B, TX DMA2 S7.
+  Parser 0x08021f1c on the struct at 0x20000408 {getc, send, ready, ...}, polled from
+  radio_trx_task (0x08029f90; main loop and the TX loop with delay_ms(1)).
+- Frame `FE FE to from cmd data.. FD`; the `to` address is not checked; reply `FE FE from to ..`
+  (no echo). Byte +0x42 of the struct (0x2000044a) = link idle: set after 100000 polls without a
+  byte, cleared by a complete frame; idle clears the CAT PTT request 0x20000318. Shown as icon
+  0x080397f0 (6x8 "C") at (75,1) while not idle (0x08033400).
+- Handler 0x0802eb00 returns 1 = FA, 2 = FB, 3 = data (`cmd` + reply bytes):
+
+| cmd | stock behaviour |
+|---|---|
+| 00 03 05 | no data: freq (5 BCD, LSB first) of the current VFO/memory; 5 bytes: set (clamped 550 kHz..30 MHz) |
+| 01 04 06 | no data: [mode, filter] (LSB/L-D 0, USB/U-D 1, AM 2, CW 3, CWR 7, NFM 5; filter = CW: CWF+1, else 1); 2 bytes: set (0/1 -> L-D/U-D if the data flag is on, 2 AM, 3 CW, 5 NFM, 7 CWR, other -> AM) |
+| 02 | `550000 - 30000000` (5 BCD, 0x2D, 5 BCD) |
+| 07 | none: VFO mode; 00 A, 01 B, A0 A=B (0x0803396c), B0 toggle |
+| 0F | split = work flags bit2: read / set 0/1 |
+| 11 | VFO flags bit1 (read), set clears it |
+| 14 | 01: AF = volume x 255/46 (set -> 0x2000033c, applied by the main loop); other subs < 0x1A stored in 0x20002518 only |
+| 15 | 02: S-meter = (dBm + 123) x 2.55, dBm (0x2000035c) clamped -123..-23; other subs 0 |
+| 16 | 02 preamp (VFO flags bit0), 12 AGC read only (LSB/USB 2, CW/CWR 1, else 3), 50 lock (work flags bit1) |
+| 19 | 00 -> 0x70 |
+| 1A | 03: filter width in *binary* (CW 0/4/9, LSB/USB 0x1F, L-D/U-D 0x22, else 0x2C); 06: data flag 0x2000037d bit0 (`[06 flag 00]`, set with 3 bytes) |
+| 1C | 00: read TX state 0x20000319 / set CAT PTT 0x20000318 |
+| 1D | 01: FB; 19: `19 01 06`; `02 01 x`: work flags bit7 -> PB0 |
+| 21 | 00 RIT offset (2 BCD + sign), 01, 02 flags: stored only (0x20000324/312/313) |
+| 25 | `[sel]`: freq of selected (00) / other VFO, reply byte 0 = current VFO number (bug); 6 bytes: write the VFO array only |
+| 26 | `[sel]`: `[cur vfo, mode, data flag, 1]`; 4 bytes: set mode of that VFO |
+
+- Data flag (0x2000037d bit0) is kept in sync in radio_trx_task: a mode change sets it to
+  "mode is L-D/U-D"; a flag change (1A 06) converts LSB<->L-D, USB<->U-D.
+- Own implementation: `src/cat.c` (deviations listed there).

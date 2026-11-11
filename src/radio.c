@@ -36,6 +36,7 @@
 #include "spectrum.h"
 #include "fm.h"
 #include "board.h"
+#include "cat.h"
 
 #define F_MIN 550000u
 #define F_MAX 30000000u
@@ -134,8 +135,6 @@ static const char *const mc_labels[4] = {"QUIT", " ", " ", "CLR"};    /* stock 0
 
 static bool dirty = true;
 static ui_state_t state = UI_MAIN;
-static uint32_t tx_until;
-#define TX_TIMEOUT_MS 30000
 static float smeter_lvl;                    /* stock 0x200006b8 smoothing state */
 static int smeter_peak, smeter_hold;
 static uint16_t scope_state[SCOPE_COLS];     /* smoothed column heights (stock 0x20002408) */
@@ -219,6 +218,7 @@ static int32_t lo_offset(void)
 
 static void apply_freq(void);
 static void fm_enter(void);
+static void toggle_vm(void);
 
 /* FILT group of a mode, -1 for CW / CWR (they use CWF; the band-pass is not in their chain). */
 static int filt_group(int mode)
@@ -353,7 +353,7 @@ static void memory_step(int dir)
         memory_recall(ch);
 }
 
-/* ---- TX (console test for now) ----
+/* ---- TX ----
  * Stock radio_trx_task order. RX->TX: PB1 (T/R) = 1, codec to TX routing, PA8 = 0, PC5 (PA)
  * = 1, LED red (PC10 = 0), PA15 = 1. TX->RX in reverse. Own addition: 10 ms for the T/R relay
  * before the PA is enabled and a 10 ms output ramp on both edges. */
@@ -392,8 +392,6 @@ int radio_tx_start(int signal, int power_idx)
     pin(GPIOA, 15, true);
     audio_tx_ramp(true);
     txing = true;
-    tx_until = signal == AUDIO_TX_SSB_U || signal == AUDIO_TX_SSB_L || signal == AUDIO_TX_AM
-            || signal == AUDIO_TX_NFM ? 0 : millis() + TX_TIMEOUT_MS;     /* timeout only for console test signals */
     dirty = true;
     return 0;
 }
@@ -413,6 +411,127 @@ void radio_tx_stop(void)
     txing = false;
     apply_mode();                       /* RX routing, demodulator, LO offset */
     dirty = true;
+}
+
+/* ---- CAT access (cat.c) ---- */
+
+/* Frequency / mode / VFO changes are refused while transmitting (no relay switching under
+ * power) and in WFM (the HF chain is off). */
+bool radio_cat_can_tune(void)
+{
+    return !txing && state != UI_FM;
+}
+
+uint32_t radio_vfo_freq(int v)
+{
+    return wp.vfo[v & 1].freq;
+}
+
+int radio_vfo_mode(int v)
+{
+    return wp.vfo[v & 1].mode;
+}
+
+/* Set VFO v (A = 0, B = 1) directly, as stock CI-V 0x25 / 0x26; applied if it is the one in
+ * use. freq 0 / mode < 0 = keep. */
+void radio_set_vfo(int v, uint32_t freq, int mode)
+{
+    vfo_t *p = &wp.vfo[v & 1];
+    if (freq)
+        p->freq = freq < F_MIN ? F_MIN : freq > F_MAX ? F_MAX : freq;
+    if (mode >= 0 && mode < MODE_COUNT)
+        p->mode = mode;
+    if (!memory_mode() && p == cur())
+        apply_mode();
+    dirty = true;
+}
+
+int radio_cur_vfo(void)
+{
+    return wp.cur_vfo;
+}
+
+/* v = 0 / 1, or -1 = toggle (A/B soft key). */
+void radio_select_vfo(int v)
+{
+    wp.cur_vfo = v < 0 ? !wp.cur_vfo : v & 1;
+    if (!memory_mode())
+        apply_all();
+    dirty = true;
+}
+
+void radio_leave_memory(void)
+{
+    if (memory_mode())
+        toggle_vm();
+    dirty = true;
+}
+
+/* Stock 0x0803396c (CI-V 07 A0): the other VFO = the current one. */
+void radio_copy_vfo(void)
+{
+    wp.vfo[!wp.cur_vfo] = wp.vfo[wp.cur_vfo];
+    dirty = true;
+}
+
+bool radio_preamp(void)
+{
+    return preamp;
+}
+
+void radio_set_preamp(bool on)
+{
+    preamp = on;
+    apply_preamp();
+    dirty = true;
+}
+
+bool radio_lock(void)
+{
+    return wp.flags & WP_FLAG_LOCK;
+}
+
+void radio_set_lock(bool on)
+{
+    wp.flags = on ? wp.flags | WP_FLAG_LOCK : wp.flags & ~WP_FLAG_LOCK;
+    dirty = true;
+}
+
+int radio_volume(void)
+{
+    return wp.volume;
+}
+
+void radio_set_volume(int v)
+{
+    wp.volume = v < 0 ? 0 : v > 46 ? 46 : v;
+    apply_volume();
+    dirty = true;
+}
+
+int radio_tx_power(void)
+{
+    return wp.dsp_opt;
+}
+
+void radio_set_tx_power(int idx)
+{
+    wp.dsp_opt = idx < 0 ? 0 : idx > 2 ? 2 : idx;       /* used at the next TX start */
+}
+
+void radio_set_pb0(bool on)
+{
+    wp.flags = on ? wp.flags | 0x80 : wp.flags & ~0x80;
+    apply_pb0();
+    dirty = true;
+}
+
+/* Receive filter width of the current mode in Hz (CWF for CW, FILT otherwise). */
+int radio_filter_hz(void)
+{
+    static const int cw_bw[3] = {50, 250, 500};
+    int fg = filt_group(cur()->mode);
+    return fg < 0 ? cw_bw[stock_settings.cw_filter] : filt_hi[fg] * 100;
 }
 
 /* Stock boot screen (0x0803458c): backlight from flags bit8, rising beep (0x080389b0: 261.6,
@@ -1043,6 +1162,8 @@ static void draw(void)
         lcd_bitmap(&icon_x50, 50, 1);
     if (wp.flags & WP_FLAG_LOCK)
         lcd_bitmap(&icon_x63, 63, 1);
+    if (cat_link())                     /* stock 0x08033400: CAT frames seen recently */
+        lcd_bitmap(&icon_cat, 75, 1);
 
     lcd_text_f(&font8, 3, 19, wp.cur_vfo ? "B" : "A", false);
     draw_main_freq(v->freq, state == UI_MAIN || state == UI_MSGBOX ? *digit() : -1);
@@ -1229,10 +1350,8 @@ void radio_poll(void)
         dirty = true;
     }
 
-    if (txing && tx_until && (int32_t)(now - tx_until) >= 0)
-        radio_tx_stop();                /* safety timeout (console test signals) */
-
-    /* PTT (PC2, active low, 20 ms debounce): voice/data TX in SSB, AM and NFM. No band
+    /* PTT (PC2, active low, 20 ms debounce) or CAT PTT (CI-V 1C 00, stock 0x20000318):
+     * voice/data TX in SSB, AM and NFM, level-triggered as stock radio_trx_task. No band
      * limits (user choice; stock allows ham bands only). CW keying: TODO. */
     static uint32_t ptt_since;
     static bool ptt_state;
@@ -1243,26 +1362,30 @@ void radio_poll(void)
         if (now - ptt_since >= 20) {
             ptt_state = ptt_raw;
             ptt_since = 0;
-            int m = cur()->mode;
-            if (ptt_state && !txing && state == UI_MAIN && m != MODE_CW && m != MODE_CWR) {
-                int sig = m == MODE_AM ? AUDIO_TX_AM : m == MODE_NFM ? AUDIO_TX_NFM
-                        : (m == MODE_USB || m == MODE_UD) ? AUDIO_TX_SSB_U : AUDIO_TX_SSB_L;
-                radio_tx_start(sig, -1);
-            } else if (!ptt_state && txing && !tx_until) {
-                radio_tx_stop();
-            }
         }
     } else {
         ptt_since = 0;
     }
+    bool want_tx = ptt_state || cat_ptt();
+    int m = cur()->mode;
+    if (want_tx && !txing && state == UI_MAIN && m != MODE_CW && m != MODE_CWR) {
+        int sig = m == MODE_AM ? AUDIO_TX_AM : m == MODE_NFM ? AUDIO_TX_NFM
+                : (m == MODE_USB || m == MODE_UD) ? AUDIO_TX_SSB_U : AUDIO_TX_SSB_L;
+        radio_tx_start(sig, -1);
+    } else if (!want_tx && txing) {
+        radio_tx_stop();
+    }
+
+    static bool cat_shown;
+    if (cat_link() != cat_shown) {
+        cat_shown = !cat_shown;
+        dirty = true;
+    }
 
     int ev;
     while ((ev = input_key_event()) >= 0) {
-        if (txing) {                    /* keys are ignored in TX; they end a console test */
-            if (tx_until)
-                radio_tx_stop();
+        if (txing)                      /* keys are ignored in TX */
             continue;
-        }
         if (wp.flags & WP_FLAG_BEEP)
             beep(2000, 20);
         handle_key(ev);

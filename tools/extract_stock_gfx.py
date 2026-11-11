@@ -40,6 +40,7 @@ ICONS = {
     0x080392C0: "img_boot",         # 48x48 boot logo @(39,0)
     0x08039320: "icon_e",           # inverted "E": empty memory channel (MW dialog)
     0x08039380: "icon_tx",          # top-left TX indicator (RX is icon_vfo)
+    0x080397F0: "icon_cat",         # (75,1) CAT link active
 }
 
 

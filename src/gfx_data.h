@@ -34,6 +34,7 @@ extern const gfx_bitmap_t icon_x14;     /* speaker */
 extern const gfx_bitmap_t icon_x50;     /* "P" (preamp) */
 extern const gfx_bitmap_t icon_x63;     /* lock */
 extern const gfx_bitmap_t icon_x86;     /* "SPL" */
+extern const gfx_bitmap_t icon_cat;     /* CAT link active, x = 75 */
 extern const gfx_bitmap_t icon_x109;    /* "QSK" */
 extern const gfx_bitmap_t img_poweroff; /* 128x64 */
 extern const gfx_bitmap_t img_boot;     /* 48x48 boot logo */

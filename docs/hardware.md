@@ -56,7 +56,7 @@ USART1, ADC1, SPI1, SYSCFG. NVIC: DMA1_Stream3, TIM1_UP_TIM10, TIM2, DMA2_Stream
 | I2C2 | PB10 SCL, PB11 SDA | 100 kHz | **TLV320AIC3204** @0x18 (page reg 0, PLL P/R/J/D, NDAC/MDAC/NADC/MADC), MCLK = 26 MHz |
 | I2C1 | PB6 SCL, PB7 SDA | 100 kHz | **VersaClock 5/6** LO @0x6A; FM radio @0x60 in TEA5767 mode (IF 225 kHz) — also ACKs 0x10/0x11, so likely **RDA5807M**; **24Cxx EEPROM** @0x50 (16-bit addr); unknown @0x2E (1-byte write, digipot?) |
 | SPI1 | PB3 SCK, PB5 MOSI, PB4 CS, PD2 CD | TX-only (BIDIOE), 8-bit, 10.5 MHz, CPOL0/CPHA0 | 128×64 mono LCD (UC1609-type); DMA2 S3 ch3 |
-| USART1 | PA9 / PA10 | 115200, RX via DMA2 S2 ch4 circular | console / CAT |
+| USART1 | PA9 / PA10 | stock: 19200, RX via DMA2 S2 ch4 circular (100 B), TX via DMA2 S7; bootloader IAP 115200 | CAT (CI-V) |
 | TIM1 CH4 | PA11 | 168 MHz/100/1000 = 1.68 kHz, 50 %, MOE gated | beeper |
 | TIM2 | — | 1 kHz update IRQ | system tick |
 | DAC1 | PA4 | static ~0.46 V (DHR=0x23A) | bias / reference, TBD |
@@ -82,7 +82,7 @@ USART1, ADC1, SPI1, SYSCFG. NVIC: DMA1_Stream3, TIM1_UP_TIM10, TIM2, DMA2_Stream
 
 ### EEPROM (24C64, 8 KB @0x50)
 
-Holds the factory calibration — make a backup (`eedump` on the console) before experimenting.
+Holds the factory calibration — make a backup (e.g. dump it over SWD/I2C) before experimenting.
 Used areas: 0x0000, 0x0400–0x05FF, 0x0800, 0x0C00, 0x1000.
 
 `0x400` bands (0xA8 B), `0x800` FM channels (0xD3 B, 87–108 MHz / 100 kHz, 0xAA = stored),

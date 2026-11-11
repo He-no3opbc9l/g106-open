@@ -3,7 +3,7 @@
  *   PC7  out  power latch, 1 = stay on. Clearing it (or any MCU reset) cuts power.
  *   PC8  in   power key, pull-up, 0 = pressed
  *   PC10 out  RX/TX LED: 1 = green (RX), 0 = red (TX); stock also drives PA15 = !PC10
- *   PA9/PA10  USART1 TX/RX (debug / bootloader console)
+ *   PA9/PA10  USART1 TX/RX (CAT, bootloader IAP)
  *   PA13/PA14 SWD — never reconfigure
  *
  * Bootloader also drives: PA12=1, PC6=1, PA15=0, PB1=0, PC9=0, PC15=0 (roles unknown,

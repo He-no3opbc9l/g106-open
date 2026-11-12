@@ -23,9 +23,10 @@ between stock and this firmware). On top of that come improvements to the DSP an
 Working on the radio:
 
 - Main screen with the stock UI (original fonts and icons are taken from the official firmware at
-  build time, see below), tuning, bands, V/M, A/B, memories (MW / MC), VER, message boxes.
+  build time, see below; the boot logo and power-off screen are our own), tuning, bands, V/M, A/B, memories (MW / MC), VER, message boxes.
 - Stock power key behaviour (short press: backlight, hold 2 s: power-off screen and save).
-- Setting editor: CWF CWT CWR QSK KS KM IMB DIS MG TXP.
+- Setting editor: CWF CWT CWR QSK KS KM IMB DIS MG TXP; call sign editor (CSN) as stock, the call
+  sign is shown on the boot screen (default "G106 OPEN").
 - RX: SSB, CW, AM, NFM. 48 kHz I/Q → DC block → adaptive I/Q balance → 16 kHz SSB phasing demodulator
   (191-tap Hilbert), CW biquad filters, AM envelope, NFM discriminator with de-emphasis and squelch, band-pass filter, dB AGC with look-ahead.
 - 1024-point FFT spectrum scope with zoom and an FFT-based S-meter.
@@ -47,7 +48,7 @@ Deliberate differences from stock:
 | AM TX | mic +12 dB before the limiter (≤ 90 % modulation) |
 | NFM | enabled in the MODE cycle (stock lists it but disables it): ±2.5 kHz deviation, 6 dB/oct pre-/de-emphasis; SQL = squelch OFF / 1..30 by the S-meter level (2 dB per step), its threshold is shown as an arrow over the S-meter (page 6) |
 
-Not done yet (stock parity): CW TX (keyer, sidetone, QSK), split, call sign editor, TX I/Q
+Not done yet (stock parity): CW TX (keyer, sidetone, QSK), split, TX I/Q
 correction and calibration menus, power/SWR metering, factory reset.
 
 ## Download

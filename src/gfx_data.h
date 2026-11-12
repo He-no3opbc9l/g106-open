@@ -1,4 +1,5 @@
-/* Fonts and icons of the original UI. The data itself is generated at build time from the
+/* Fonts and icons of the original UI (the boot logo is our own,
+ * src/gfx_own.c). The data itself is generated at build time from the
  * stock app image (tools/extract_stock_gfx.py -> build/stock_gfx.c), not kept in the tree.
  * Bitmaps: row-major, 1 bpp, MSB = leftmost pixel. */
 #ifndef GFX_DATA_H
@@ -36,8 +37,7 @@ extern const gfx_bitmap_t icon_x63;     /* lock */
 extern const gfx_bitmap_t icon_x86;     /* "SPL" */
 extern const gfx_bitmap_t icon_cat;     /* CAT link active, x = 75 */
 extern const gfx_bitmap_t icon_x109;    /* "QSK" */
-extern const gfx_bitmap_t img_poweroff; /* 128x64 */
-extern const gfx_bitmap_t img_boot;     /* 48x48 boot logo */
+extern const gfx_bitmap_t img_boot;     /* 48x48 boot logo, own artwork (src/gfx_own.c) */
 extern const gfx_bitmap_t icon_e;       /* inverted "E": empty memory channel */
 extern const gfx_bitmap_t icon_tx;      /* top-left TX indicator (icon_vfo is RX) */
 

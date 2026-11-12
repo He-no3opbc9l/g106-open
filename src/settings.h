@@ -107,6 +107,8 @@ extern uint8_t nfm_sql;                 /* own setting: NFM squelch 0 (open)..30
 int settings_load(void);
 /* Call sign record at EEPROM 0x0500 {0xAA, len, char[16]} (stock CSN); "" if not set. */
 void settings_read_callsign(char out[16]);
+/* Write the call sign (stock CSN, at most 15 characters; "" clears it). <0 on EEPROM error. */
+int settings_write_callsign(const char *s);
 int band_slot_of(uint32_t freq);    /* stock 0x08031b98: 0..20 */
 /* Write one memory channel (stock format, 8 bytes at ch * 8). <0 on EEPROM error. */
 int settings_write_memory(int ch, const vfo_t *v);

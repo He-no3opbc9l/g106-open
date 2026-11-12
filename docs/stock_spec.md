@@ -266,3 +266,15 @@ Shift registers (filters) need slow bit-banging (~1 µs per phase).
 - Data flag (0x2000037d bit0) is kept in sync in radio_trx_task: a mode change sets it to
   "mode is L-D/U-D"; a flag change (1A 06) converts LSB<->L-D, USB<->U-D.
 - Own implementation: `src/cat.c` (deviations listed there).
+
+## CSN: call sign editor (0x0803186c -> editor 0x08033dec)
+
+Screen "CALL SIGN EDITOR" (font8, centred, y 0), rules at y 9 and 53, labels QUIT (0,55) / BACK (51,55)
+/ SAVE (104,55) in font8, the text so far in font16 centred in (0,10)-(127,30). Below, at y 39, a strip
+of 10 consecutive ASCII characters (0x20 + (base + i) % 95) at x = 4 + 12 i, initial base 'A'; the
+cursor (2-pixel underline at y 47/48, x 3+12c .. 9+12c, blinks ~440 ms) moves with the tune dial and
+scrolls the strip at the ends. Keys: tune push (0x202) appends the character (max 15), F2 / F3
+(0x102 / 0x104) delete the last one, F4 (0x201) saves, F1 (0x101) quits. Save writes the whole
+0x12-byte record to EEPROM 0x0500 (`0xAA, len, chars`; empty text = `0, 0`), on failure the box
+"ERROR / CAN'T SAVE!" for 5 s. Stock stores `base + cursor + 0x20` without the modulo (wrong characters
+in the wrapped part of the strip); ours stores what is shown.

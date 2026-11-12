@@ -347,6 +347,21 @@ int settings_load(void)
     return ok ? 0 : -1;
 }
 
+/* Stock CSN save (0x0803186c): the whole 0x12-byte record at 0x0500; empty = {0, 0}. */
+int settings_write_callsign(const char *s)
+{
+    uint8_t rec[0x12] = {0};
+    unsigned n = strlen(s);
+    if (n > 15)
+        n = 15;
+    if (n) {
+        rec[0] = 0xAA;
+        rec[1] = n;
+        memcpy(&rec[2], s, n);
+    }
+    return ee_write(0x0500, rec, sizeof rec);
+}
+
 /* Stock boot (0x0803458c): length = min(len, strlen), at most 15 characters. */
 void settings_read_callsign(char out[16])
 {

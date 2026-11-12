@@ -45,8 +45,19 @@
 #define POPUP_MS 2000
 #define MSGBOX_MS 2000
 #define BLINK_MS 500
+#define BRAND "G106 OPEN"                /* caption when no call sign is set */
 
-typedef enum { UI_MAIN, UI_MW, UI_MC, UI_VER, UI_MSGBOX, UI_EDIT, UI_FM } ui_state_t;
+/* Boot / power-off caption (stock boot 0x0803458c): the call sign, else the brand line, centred
+ * in (0,49)-(127,63). */
+static void draw_caption(void)
+{
+    char cs[16];
+    settings_read_callsign(cs);
+    const char *t = cs[0] ? cs : BRAND;
+    lcd_text_f(&font8, (128 - lcd_text_width(&font8, t)) / 2, 49 + (15 - font8.height) / 2, t, false);
+}
+
+typedef enum { UI_MAIN, UI_MW, UI_MC, UI_VER, UI_MSGBOX, UI_EDIT, UI_FM, UI_CSN } ui_state_t;
 
 /* Stock setting editor descriptor (0x080313a0): range, label, value text, storage. */
 typedef enum { ST_SETTINGS, ST_PARAM2, ST_WORKPARAMS, ST_OWN } store_t;
@@ -300,7 +311,9 @@ void radio_power_off(void)
     board_rf_off_state();
     rf_off();
     lcd_clear();
-    lcd_bitmap(&img_poweroff, 0, 0);
+    /* "73" in the big WFM digits, the call sign (or brand line) under it as on the boot screen. */
+    lcd_text_f(&font_fm, (128 - lcd_text_width(&font_fm, "73")) / 2, 8, "73", false);
+    draw_caption();
     lcd_flush();
     uint32_t t0 = millis();
     if (wp.flags & WP_FLAG_BEEP) {
@@ -535,17 +548,14 @@ int radio_filter_hz(void)
 }
 
 /* Stock boot screen (0x0803458c): backlight from flags bit8, rising beep (0x080389b0: 261.6,
- * 329.6, 392 Hz x 100 ms) if beep is on, logo @(39,0), call sign (default: brand name; ours: "G106")
+ * 329.6, 392 Hz x 100 ms) if beep is on, logo @(39,0), call sign (default: brand name; ours: "G106 OPEN")
  * centred in (0,49)-(127,63), 3 s. Audio is still off (no demod mode set yet), as stock unmutes later. */
 static void boot_screen(void)
 {
     lcd_backlight(wp.flags & WP_FLAG_BACKLIGHT);
     lcd_clear();
     lcd_bitmap(&img_boot, 39, 0);
-    char cs[16];
-    settings_read_callsign(cs);
-    const char *t = cs[0] ? cs : "G106";
-    lcd_text_f(&font8, (128 - lcd_text_width(&font8, t)) / 2, 49 + (15 - font8.height) / 2, t, false);
+    draw_caption();
     lcd_flush();
     uint32_t t0 = millis();
     if (wp.flags & WP_FLAG_BEEP) {
@@ -795,6 +805,80 @@ static void draw_msgbox(void)
 }
 
 /* Stock VER screen 0x0803198c, with this firmware's identity. */
+/* ---- CSN: call sign editor (stock 0x08033dec). The tune dial moves a cursor over a strip of
+ * ten consecutive ASCII characters (0x20..0x7E, wraps) and scrolls it at the ends; dial push
+ * appends the character under the cursor (max 15), F2 / F3 delete the last one, F4 saves (empty
+ * clears), F1 quits. Shown at boot instead of the brand line. */
+#define CSN_MAX 15
+#define CSN_CHARS 95
+static char csn_buf[CSN_MAX + 1];
+static int csn_len, csn_base, csn_cur;
+
+static void open_csn(void)
+{
+    settings_read_callsign(csn_buf);
+    csn_len = strlen(csn_buf);
+    csn_base = 'A' - ' ';               /* stock starts the strip at 'A' */
+    csn_cur = 0;
+    state = UI_CSN;
+}
+
+static char csn_char(int i)
+{
+    return ' ' + (csn_base + i) % CSN_CHARS;
+}
+
+static void draw_csn(bool blink)
+{
+    lcd_clear();
+    text_in_rect("CALL SIGN EDITOR", 0, 0, 127, 8);
+    lcd_text_f(&font8, 0, 55, "QUIT", false);
+    lcd_text_f(&font8, 51, 55, "BACK", false);
+    lcd_text_f(&font8, 104, 55, "SAVE", false);
+    lcd_hline(0, 127, 9, true);
+    lcd_hline(0, 127, 53, true);
+    lcd_text_f(&font16, (128 - lcd_text_width(&font16, csn_buf)) / 2, 12, csn_buf, false);
+    for (int i = 0; i < 10; i++) {
+        char c[2] = {csn_char(i), 0};
+        lcd_text_f(&font8, 4 + 12 * i, 39, c, false);
+    }
+    if (!blink) {                       /* cursor: two-pixel underline under the character */
+        lcd_hline(3 + 12 * csn_cur, 9 + 12 * csn_cur, 47, true);
+        lcd_hline(3 + 12 * csn_cur, 9 + 12 * csn_cur, 48, true);
+    }
+}
+
+static void csn_key(int code)
+{
+    if (code == KEY_F1) {
+        state = UI_MAIN;
+    } else if (code == KEY_F2 || code == KEY_F3) {
+        if (csn_len > 0)
+            csn_buf[--csn_len] = 0;
+    } else if (code == KEY_TUNE_PUSH) {
+        if (csn_len < CSN_MAX) {
+            csn_buf[csn_len++] = csn_char(csn_cur);
+            csn_buf[csn_len] = 0;
+        }
+    } else if (code == KEY_F4) {
+        state = UI_MAIN;
+        if (settings_write_callsign(csn_buf) < 0)
+            msgbox("ERROR", "CAN'T SAVE!");
+    }
+}
+
+static void csn_dial(int d)
+{
+    csn_cur += d;
+    if (csn_cur < 0) {
+        csn_cur = 0;
+        csn_base = (csn_base + CSN_CHARS - 1) % CSN_CHARS;
+    } else if (csn_cur > 9) {
+        csn_cur = 9;
+        csn_base = (csn_base + 1) % CSN_CHARS;
+    }
+}
+
 static void draw_version(void)
 {
     lcd_clear();
@@ -944,6 +1028,7 @@ static void softkey(int k, bool lng)
     case 8: open_edit(&set_key_speed); break;     /* KS */
     case 9: open_edit(&set_key_mode); break;      /* KM */
     case 10: open_edit(&set_iambic); break;       /* IMB */
+    case 11: open_csn(); break;                   /* CSN */
     case 13: open_edit(&set_disp); break;         /* DIS */
     case 18: open_edit(&set_mic_gain); break;     /* MG */
     case 19: open_edit(&set_tx_power); break;     /* TXP */
@@ -1152,6 +1237,12 @@ static void draw(void)
         return;
     }
 
+    if (state == UI_CSN) {
+        draw_csn(blink);
+        lcd_flush();
+        return;
+    }
+
     const vfo_t *v = state == UI_MC ? &memories[dlg_ch] : cur();
     lcd_clear();
     lcd_bitmap(txing ? &icon_tx : &icon_vfo, 2, 1);
@@ -1253,6 +1344,9 @@ static void handle_key(int ev)
             close_edit(false);
         else if (!lng && (code == KEY_F4 || code == KEY_TUNE_PUSH))
             close_edit(true);
+    } else if (state == UI_CSN) {
+        if (!lng)
+            csn_key(code);
     } else if (state == UI_MW || state == UI_MC) {
         if (!lng)
             dialog_key(code);
@@ -1306,6 +1400,8 @@ static void tune(int d, uint32_t now)
         int v = edit_value + d;
         edit_value = v < edit->min ? edit->min : v > edit->max ? edit->max : v;
         setting_set(edit, edit_value);  /* stock applies live, restores on QUIT */
+    } else if (state == UI_CSN) {
+        csn_dial(d);
     } else if (state == UI_MW) {
         dlg_ch = wrap_ch(dlg_ch + d);
     } else if (state == UI_MC) {

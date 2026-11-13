@@ -22,6 +22,7 @@ void keyer_set_iambic(int b);           /* IMB 0 MODE-A, 1 MODE-B */
 void keyer_set_ratio(float ratio);      /* CWR 2.0 .. 4.0 */
 void keyer_set_hang(int ms);            /* QSK time 0..1000 ms */
 void keyer_set_tone(int hz);            /* CWT sidetone 500..1000 Hz */
+void keyer_set_qsk(bool on);            /* QSK flag: off = the keyer never requests TX (PTT needed) */
 
 void keyer_enable(bool on);             /* only in CW / CWR; off resets the state and the sidetone */
 void keyer_set_ready(bool ready);       /* transmitter switched to TX */

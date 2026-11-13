@@ -33,7 +33,8 @@ Working on the radio:
 - TX: SSB, AM and NFM voice via PTT, data input for L-D / U-D (digital modes).
 - CW TX as stock: iambic / straight keyer on the key jack (PA6 dot, PA7 dash; KS speed, KM MAN /
   AUTO-L / AUTO-R, IMB mode A / B, CWR dash ratio), sidetone at the CWT pitch, 10 ms keying
-  ramps, QSK hang time. Not tested with a real key yet.
+  ramps, QSK hang time (short press of the QSK soft key switches key-controlled TX on / off, as
+  stock: with QSK off the key only works while PTT is held). Not tested with a real key yet.
 - WFM broadcast receiver (built-in FM chip): seek and channels.
 - CAT: Icom CI-V protocol on USART1 like stock (19200 8N1), see [CAT](#cat).
 

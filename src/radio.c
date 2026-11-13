@@ -904,6 +904,7 @@ static void apply_keyer(void)
     keyer_set_ratio(2.0f + 0.5f * stock_settings.cw_ratio);
     keyer_set_hang(stock_settings.qsk_time);
     keyer_set_tone(stock_settings.cw_tone);
+    keyer_set_qsk(wp.flags & WP_FLAG_QSK);
 }
 
 static int setting_get(const setting_t *s)
@@ -1045,6 +1046,10 @@ static void softkey(int k, bool lng)
     case 4: open_edit(&set_cw_flt); break;        /* CWF */
     case 5: open_edit(&set_cw_tone); break;       /* CWT */
     case 6: open_edit(&set_cw_ratio); break;      /* CWR = CW RATIO */
+    case 7:                             /* QSK: key-controlled TX on / off, icon on the main screen */
+        wp.flags ^= WP_FLAG_QSK;
+        apply_keyer();
+        break;
     case 8: open_edit(&set_key_speed); break;     /* KS */
     case 9: open_edit(&set_key_mode); break;      /* KM */
     case 10: open_edit(&set_iambic); break;       /* IMB */
@@ -1273,6 +1278,8 @@ static void draw(void)
         lcd_bitmap(&icon_x50, 50, 1);
     if (wp.flags & WP_FLAG_LOCK)
         lcd_bitmap(&icon_x63, 63, 1);
+    if (wp.flags & WP_FLAG_QSK)
+        lcd_bitmap(&icon_x109, 109, 1);
     if (cat_link())                     /* stock 0x08033400: CAT frames seen recently */
         lcd_bitmap(&icon_cat, 75, 1);
 
@@ -1490,7 +1497,7 @@ void radio_poll(void)
         /* CW (stock radio_trx_task + keyer): the paddles request TX, the keyer ramps the carrier
          * and stays "active" for the QSK time after the last element. PTT / CAT PTT only
          * switch the T/R relays (no carrier without the key), as stock. */
-        bool req = keyer_request();
+        bool req = keyer_request() && (wp.flags & WP_FLAG_QSK);
         if ((want_tx || req) && !txing && state == UI_MAIN) {
             radio_tx_start(AUDIO_TX_CARRIER, -1);
             keyer_set_ready(true);

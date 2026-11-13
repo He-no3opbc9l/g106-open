@@ -299,3 +299,7 @@ A generic keyer state machine (struct at 0x20002008) is ticked from the TIM2 1 m
 - DSP (modes 4 / 5, 48 kHz): envelope e += / -= 1/960 per sample (0 .. 0.5, 10 ms ramps), I = Q =
   e x 0.09 x power factor (+ DC offsets); LO = f in TX (CW -tone / CWR +tone only in RX).
 - PTT in CW mode: T/R relays only (no carrier without the key).
+- QSK flag = work params flags bit3 (saved with them): short press of the QSK soft key toggles it
+  (0x08032c0c), icon "QSK" at (109,1) while set. In the keyer tick (0x0802740c) the flag is copied
+  to +0x24; while it is 0 `active` is forced to 0, i.e. the key never requests TX itself: with QSK
+  off TX needs PTT (the key then only keys the carrier). Long press = QSK TIME (hang).

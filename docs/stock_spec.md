@@ -299,6 +299,12 @@ A generic keyer state machine (struct at 0x20002008) is ticked from the TIM2 1 m
 - DSP (modes 4 / 5, 48 kHz): envelope e += / -= 1/960 per sample (0 .. 0.5, 10 ms ramps), I = Q =
   e x 0.09 x power factor (+ DC offsets); LO = f in TX (CW -tone / CWR +tone only in RX).
 - PTT in CW mode: T/R relays only (no carrier without the key).
+- Split (SPL, page 4 F1, 0x08032c94): toggles work flags bit2 (icon "SPL" at (86,1); CAT 0F sets it).
+  radio_trx_task (0x0802a136): with split and in memory mode TX is refused (error beep 523 Hz 100 ms,
+  0x08038a08), also when the other VFO is outside the TX band table. While TX is active the LO / band
+  filters use the other VFO's frequency (0x0802a2b6; the mode used for the DSP stays the current
+  VFO's) and the main screen swaps the VFOs (0x08033400): label, mode, preamp, frequency of the TX
+  VFO on the main line, the RX VFO on the second line; swapped back on RX.
 - QSK flag = work params flags bit3 (saved with them): short press of the QSK soft key toggles it
   (0x08032c0c), icon "QSK" at (109,1) while set. In the keyer tick (0x0802740c) the flag is copied
   to +0x24; while it is 0 `active` is forced to 0, i.e. the key never requests TX itself: with QSK

@@ -31,6 +31,8 @@ void radio_leave_memory(void);
 void radio_copy_vfo(void);              /* other VFO = current */
 bool radio_preamp(void);
 void radio_set_preamp(bool on);
+bool radio_split(void);
+void radio_set_split(bool on);
 bool radio_lock(void);
 void radio_set_lock(bool on);
 int radio_volume(void);                 /* 0..46 */

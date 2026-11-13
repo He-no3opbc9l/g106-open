@@ -10,7 +10,7 @@
  *                       LSB/USB become L-D/U-D while the data mode is on (1A 06)
  *   02                  band edges 550 kHz - 30 MHz
  *   07                  (none) VFO mode, 00 VFO A, 01 VFO B, A0 A=B, B0 swap A/B
- *   0F                  split: always off (split is not implemented yet)
+ *   0F                  split: read / set 00, 01 (work flags bit2, as the SPL soft key)
  *   11                  attenuator: none (reads 0, set ignored)
  *   14 01 / 14 0A       AF level 0..255 (volume 0..46) / RF power (TXP LOW/MID/HIGH);
  *                       other 14 xx levels are only stored, as stock
@@ -28,7 +28,7 @@
  * answers FB or picks AM); 1A 03 is BCD with the real filter width (stock sends fixed binary
  * values); 25 / 26 echo the VFO selector (stock: the current VFO number) and 25 tunes at once;
  * 14 0A sets TXP; frequency, mode and VFO changes are refused (FA) while transmitting or in
- * WFM; split on is refused. */
+ * WFM. */
 #include <string.h>
 #include "system.h"
 #include "uart.h"
@@ -222,13 +222,17 @@ static int command(void)
         default: return R_NG;
         }
 
-    case 0x0F:                                  /* split: not implemented */
+    case 0x0F:                                  /* split: flags bit2 */
         if (len == 0) {
-            r[0] = 0;
+            r[0] = radio_split();
             reply(r, 1);
             return R_DATA;
         }
-        return len == 1 && sub == 0 ? R_OK : R_NG;
+        if (len == 1 && sub <= 1) {
+            radio_set_split(sub);
+            return R_OK;
+        }
+        return R_NG;
 
     case 0x11:                                  /* attenuator: none */
         if (len == 0) {

@@ -35,6 +35,8 @@ Working on the radio:
   AUTO-L / AUTO-R, IMB mode A / B, CWR dash ratio), sidetone at the CWT pitch, 10 ms keying
   ramps, QSK hang time (short press of the QSK soft key switches key-controlled TX on / off, as
   stock: with QSK off the key only works while PTT is held). Not tested with a real key yet.
+- Split (SPL, page 4): RX on the current VFO, TX on the other one (frequency only), SPL icon, the
+  TX VFO is shown on the main line while transmitting; CAT 0F. No TX in split + memory mode, as stock.
 - WFM broadcast receiver (built-in FM chip): seek and channels.
 - CAT: Icom CI-V protocol on USART1 like stock (19200 8N1), see [CAT](#cat).
 
@@ -52,7 +54,7 @@ Deliberate differences from stock:
 | AM TX | mic +12 dB before the limiter (≤ 90 % modulation) |
 | NFM | enabled in the MODE cycle (stock lists it but disables it): ±2.5 kHz deviation, 6 dB/oct pre-/de-emphasis; SQL = squelch OFF / 1..30 by the S-meter level (2 dB per step), its threshold is shown as an arrow over the S-meter (page 6) |
 
-Not done yet (stock parity): split, TX I/Q
+Not done yet (stock parity): TX I/Q
 correction and calibration menus, power/SWR metering, factory reset.
 
 ## Download

@@ -46,6 +46,7 @@ _Static_assert(__builtin_offsetof(workparams_t, crc) == 0x2C, "stock work params
 
 #define WP_FLAG_MEMORY    (1u << 0)
 #define WP_FLAG_LOCK      (1u << 1)
+#define WP_FLAG_SPLIT     (1u << 2)     /* split: TX on the other VFO (stock SPL soft key) */
 #define WP_FLAG_QSK       (1u << 3)     /* QSK on: the key switches to TX itself (stock 0x08032c0c) */
 #define WP_FLAG_BEEP      (1u << 4)
 #define WP_FLAG_FM        (1u << 5)

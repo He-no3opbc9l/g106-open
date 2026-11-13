@@ -215,6 +215,13 @@ static void apply_pb0(void)
  * NFM (own) +100 Hz too, so an unmodulated carrier is not taken out by the DC block. */
 static bool txing;
 
+/* Split (stock flags bit2): RX on the current VFO, TX on the other one (frequency only; the mode
+ * stays the current VFO's). Not in memory mode: stock refuses TX there (error beep). */
+static uint32_t tx_freq(void)
+{
+    return (wp.flags & WP_FLAG_SPLIT) && !memory_mode() ? wp.vfo[!wp.cur_vfo].freq : cur()->freq;
+}
+
 static int32_t lo_offset(void)
 {
     if (txing)
@@ -261,7 +268,7 @@ static void apply_mode(void)
 
 static void apply_freq(void)
 {
-    rf_set_freq_lo(cur()->freq, lo_offset());
+    rf_set_freq_lo(txing ? tx_freq() : cur()->freq, lo_offset());
     if (!memory_mode())
         wp.band = band_slot_of(cur()->freq);
     dirty = true;
@@ -388,11 +395,19 @@ int radio_tx_start(int signal, int power_idx)
         return 0;
     if (state == UI_FM)
         return -1;
+    if ((wp.flags & WP_FLAG_SPLIT) && memory_mode()) {      /* stock 0x0802a136: no TX in split + memory */
+        static uint32_t last_beep;
+        if (!last_beep || millis() - last_beep > 1000) {
+            last_beep = millis() | 1;
+            beep(523, 100);
+        }
+        return -1;
+    }
     if (power_idx < 0 || power_idx > 2)
         power_idx = wp.dsp_opt;
     audio_tx_ramp(false);
     audio_set_tx(power[power_idx], stock_settings.tx_dc_i, stock_settings.tx_dc_q);
-    rf_set_freq_lo(cur()->freq, 0);     /* TX: no CW / AM LO offset */
+    rf_set_freq_lo(tx_freq(), 0);       /* TX: no CW / AM LO offset */
     bool data = cur()->mode == MODE_LD || cur()->mode == MODE_UD;
     audio_set_tx_source(data);
     audio_set_mode(signal);
@@ -497,6 +512,17 @@ void radio_set_preamp(bool on)
 {
     preamp = on;
     apply_preamp();
+    dirty = true;
+}
+
+bool radio_split(void)
+{
+    return wp.flags & WP_FLAG_SPLIT;
+}
+
+void radio_set_split(bool on)
+{
+    wp.flags = on ? wp.flags | WP_FLAG_SPLIT : wp.flags & ~WP_FLAG_SPLIT;
     dirty = true;
 }
 
@@ -1054,6 +1080,10 @@ static void softkey(int k, bool lng)
     case 9: open_edit(&set_key_mode); break;      /* KM */
     case 10: open_edit(&set_iambic); break;       /* IMB */
     case 11: open_csn(); break;                   /* CSN */
+    case 12:                            /* SPL: split on / off */
+        wp.flags ^= WP_FLAG_SPLIT;
+        dirty = true;
+        break;
     case 13: open_edit(&set_disp); break;         /* DIS */
     case 18: open_edit(&set_mic_gain); break;     /* MG */
     case 19: open_edit(&set_tx_power); break;     /* TXP */
@@ -1268,7 +1298,10 @@ static void draw(void)
         return;
     }
 
-    const vfo_t *v = state == UI_MC ? &memories[dlg_ch] : cur();
+    /* Split TX (stock 0x08033400): the TX VFO takes over the main line, the RX one moves down. */
+    bool stx = txing && (wp.flags & WP_FLAG_SPLIT) && !memory_mode();
+    int vi = stx ? !wp.cur_vfo : wp.cur_vfo;
+    const vfo_t *v = state == UI_MC ? &memories[dlg_ch] : stx ? &wp.vfo[vi] : cur();
     lcd_clear();
     lcd_bitmap(txing ? &icon_tx : &icon_vfo, 2, 1);
     lcd_text_f(&font8, 26, 1, mode_names[v->mode < MODE_COUNT ? v->mode : 0], false);
@@ -1280,17 +1313,19 @@ static void draw(void)
         lcd_bitmap(&icon_x63, 63, 1);
     if (wp.flags & WP_FLAG_QSK)
         lcd_bitmap(&icon_x109, 109, 1);
+    if (wp.flags & WP_FLAG_SPLIT)
+        lcd_bitmap(&icon_x86, 86, 1);
     if (cat_link())                     /* stock 0x08033400: CAT frames seen recently */
         lcd_bitmap(&icon_cat, 75, 1);
 
-    lcd_text_f(&font8, 3, 19, wp.cur_vfo ? "B" : "A", false);
+    lcd_text_f(&font8, 3, 19, vi ? "B" : "A", false);
     draw_main_freq(v->freq, state == UI_MAIN || state == UI_MSGBOX ? *digit() : -1);
 
     if (popup_until && now < popup_until) {
         lcd_text_f(&font8, 3, 31, popup_text, false);
     } else if (disp_mode != 2) {
-        lcd_text_f(&font8, 3, 31, wp.cur_vfo ? "A " : "B ", false);
-        fmt_freq(s, wp.vfo[!wp.cur_vfo].freq);
+        lcd_text_f(&font8, 3, 31, vi ? "A " : "B ", false);
+        fmt_freq(s, wp.vfo[!vi].freq);
         lcd_text_f(&font8, 16, 31, s, false);
     }
 
@@ -1499,8 +1534,8 @@ void radio_poll(void)
          * switch the T/R relays (no carrier without the key), as stock. */
         bool req = keyer_request() && (wp.flags & WP_FLAG_QSK);
         if ((want_tx || req) && !txing && state == UI_MAIN) {
-            radio_tx_start(AUDIO_TX_CARRIER, -1);
-            keyer_set_ready(true);
+            if (radio_tx_start(AUDIO_TX_CARRIER, -1) == 0)
+                keyer_set_ready(true);
         } else if (txing && !want_tx && !keyer_active()) {
             keyer_set_ready(false);
             radio_tx_stop();

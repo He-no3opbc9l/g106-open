@@ -64,10 +64,10 @@ def main():
             print("\ntimeout: no XMODEM request from the bootloader, nothing was sent")
             return 2
         d = ser.read(256)
-        if not d:
-            continue
-        show(d)
-        buf = (buf + d)[-512:]
+        if d:
+            show(d)
+            buf = (buf + d)[-512:]
+        # checked on every pass: the menu may show up < 1 s after the last "1" and then go quiet
         low = buf.lower()
         if b"update fw" in low and time.time() - sent_at > 1.0 and b"erasing" not in low:
             time.sleep(0.3)

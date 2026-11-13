@@ -10,17 +10,18 @@
  *   BAND- + BAND+: lock      volume push: PB0 toggle (stock)
  *   F1..F4: soft keys of the current page; the first press only opens the panel (stock);
  *           page 6 (own): FILT = RX/TX audio filter of the current mode (SSB, DATA, AM 2.0..6.0 kHz,
- *                         NFM 2.0..3.0 kHz; CW opens CWF), ZOOM = scope zoom 1.0..3.0x,
+ *                         NFM 2.0..3.0 kHz; CW opens CWF),
  *                         AGC = receive AGC speed OFF / SOFT / MED / HARD (stock),
- *                         SQL = NFM squelch OFF / 1..30 (S-meter threshold, arrow on the meter)
- *           page 7 (own): LOW / MID / HIGH = mic equaliser, COMP = speech compressor
- *                         (TX, microphone only)
+ *                         SQL = NFM squelch OFF / 1..30 (S-meter threshold, arrow on the meter),
+ *                         SETT = SETTINGS menu (categories RX / TX / CW / DISPLAY / SYSTEM: all
+ *                         own and advanced settings, see the SETTINGS menu section below)
  *   WFM (page 5 F1, stock 0x08033990): broadcast FM 87..108 MHz on the FM chip, see fm_key()
  *   dialogs: MW / MC (QUIT = F1, SAVE / CLR = F4, tune encoder = channel), VER, message box,
  *            setting editor (stock 0x080313a0: QUIT = F1, SAVE = F4 or tune push)
  * Deviations from stock: the preamp is global, not per VFO/band; NFM (RX + TX) is enabled. */
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "keyer.h"
 #include <math.h>
@@ -38,6 +39,8 @@
 #include "fm.h"
 #include "board.h"
 #include "cat.h"
+#include "i2c.h"
+#include "versaclock.h"
 
 #define F_MIN 550000u
 #define F_MAX 30000000u
@@ -58,7 +61,7 @@ static void draw_caption(void)
     lcd_text_f(&font8, (128 - lcd_text_width(&font8, t)) / 2, 49 + (15 - font8.height) / 2, t, false);
 }
 
-typedef enum { UI_MAIN, UI_MW, UI_MC, UI_VER, UI_MSGBOX, UI_EDIT, UI_FM, UI_CSN } ui_state_t;
+typedef enum { UI_MAIN, UI_MW, UI_MC, UI_VER, UI_MSGBOX, UI_EDIT, UI_FM, UI_CSN, UI_MENU, UI_TXCAL } ui_state_t;
 
 /* Stock setting editor descriptor (0x080313a0): range, label, value text, storage. */
 typedef enum { ST_SETTINGS, ST_PARAM2, ST_WORKPARAMS, ST_OWN } store_t;
@@ -70,7 +73,9 @@ typedef struct {
                                        "%z" = value x10 shown as a zoom factor "2.5x",
                                        "%e" = EQ value 0..24 shown as -12..+12 dB,
                                        "%h" = value in 0.5 dB shown as "12.5dB",
-                                       "%o" = number, 0 shown as "OFF" */
+                                       "%o" = number, 0 shown as "OFF",
+                                       "%r" = signed offset from the middle of the range,
+                                       "%p" = 0.01 ppm shown as "+1.23ppm" */
     const char *const *names;       /* value names indexed by value */
     void *var;
     uint8_t size;                   /* 1, 2 = int16 */
@@ -110,7 +115,7 @@ static const setting_t set_filt[FILT_COUNT] = {
     {20, 30, "FILT NFM:", "%k", NULL, &filt_hi[FILT_NFM], 1, ST_OWN},
 };
 /* Own: scope zoom around the centre, 1.0x..3.0x in 0.1x steps. */
-static const setting_t set_zoom = {10, 30, "ZOOM:", "%z", NULL, &scope_zoom, 1, ST_OWN};
+static const setting_t set_zoom = {10, 30, "SCOPE ZOOM:", "%z", NULL, &scope_zoom, 1, ST_OWN};
 /* Own: mic equaliser bands, -12..+12 dB (stored +12). */
 static const setting_t set_eq_low = {0, 24, "MIC LOW:", "%e", NULL, &mic_eq[0], 1, ST_OWN};
 static const setting_t set_eq_mid = {0, 24, "MIC MID:", "%e", NULL, &mic_eq[1], 1, ST_OWN};
@@ -123,8 +128,32 @@ static const setting_t set_agc = {AGC_OFF, AGC_HARD, "AGC:", NULL, agc_names, &a
 /* Own: NFM squelch (stock has no NFM): opens when the S-meter level reaches nfm_sql x 2 dB
  * (3 steps per S unit: 24 = S9, 30 = S9+12); shown as an arrow over the S-meter. */
 static const setting_t set_sql = {0, 30, "NFM SQL:", "%o", NULL, &nfm_sql, 1, ST_OWN};
+/* Own: AM TX modulation depth (of the RMS-levelled mic signal), 0..100 %. */
+static const setting_t set_am_mod = {0, 100, "AM MOD:", "%d%%", NULL, &am_mod, 1, ST_OWN};
+/* Own diagnostic (not stored): AM TX modulated by a 1 kHz sine at exactly AM MOD instead of the mic. */
+static uint8_t am_tone;
+static const char *const off_on_names[] = {"OFF", "ON "};
+static const setting_t set_am_tone = {0, 1, "AM TONE:", NULL, off_on_names, &am_tone, 1, ST_OWN};
 static const setting_t set_tx_power = {0, 2, "TX POWER:", NULL, txp_names,
                                        &wp.dsp_opt, 2, ST_WORKPARAMS};
+/* Own: LCD contrast, -10..+10 around the stock register value 0x38 (2 per step). */
+static const setting_t set_contrast = {0, CONTRAST_MAX, "CONTRAST:", "%r", NULL,
+                                       &lcd_contrast_lvl, 1, ST_OWN};
+/* Own: FREQ CAL, VersaClock reference crystal error (+ = the crystal runs fast, the radio
+ * would be tuned too high). */
+static const setting_t set_freq_cal = {-FREQ_CAL_MAX, FREQ_CAL_MAX, "FREQ CAL:", "%p", NULL,
+                                       &freq_cal, 2, ST_OWN};
+static const float tx_power[3] = {0.2f, 0.4f, 1.0f};      /* stock 0x10000080 */
+/* Own: AM drive. The PA is linear up to about the MID CW level (CW carrier LOW 7.0 / MID 12.7 /
+ * HIGH 15.2 Vrms): with the stock factors the AM carrier (1/2 of the peak) sat in saturation at
+ * HIGH and the modulation was crushed (1 kHz test tone loud on LOW, almost gone on HIGH).
+ * Here the AM envelope peak at HIGH = the MID CW level (carrier ~1 W, PEP ~4 W). */
+static const float tx_power_am[3] = {0.2f, 0.3f, 0.4f};
+
+static void apply_contrast(void)
+{
+    lcd_contrast(0x38 + 2 * (lcd_contrast_lvl - CONTRAST_STOCK));
+}
 
 static const char *const mode_names[MODE_COUNT] = {"LSB", "L-D", "USB", "U-D", "CW ", "CWR",
                                                    "NFM", "AM "};
@@ -132,21 +161,22 @@ static const char *const mode_names[MODE_COUNT] = {"LSB", "L-D", "USB", "U-D", "
 static const bool mode_enabled[MODE_COUNT] = {1, 1, 1, 1, 1, 0, 1, 1};
 
 /* Soft keys (stock table 0x08038c44): labels per page; actions in softkey(). */
-#define NUM_PAGES 7                     /* stock has 5; pages 6-7 are ours */
+#define NUM_PAGES 6                     /* stock has 5; page 6 is ours */
 static const char *const softkey_labels[NUM_PAGES][4] = {
     {"V/M", "A/B", "MW", "MC"},
     {"CWF", "CWT", "CWR", "QSK"},
     {"KS", "KM", "IMB", "CSN"},
     {"SPL", "DIS", "BP", "VER"},
     {"WFM", "BSM", "MG", "TXP"},
-    {"FILT", "ZOOM", "AGC", "SQL"},
-    {"LOW", "MID", "HIGH", "COMP"},
+    {"FILT", "AGC", "SQL", "SETT"},
 };
 static const char *const mw_labels[4] = {"QUIT", " ", " ", "SAVE"};   /* stock 0x08038d04 */
 static const char *const mc_labels[4] = {"QUIT", " ", " ", "CLR"};    /* stock 0x08038d40 */
 
 static bool dirty = true;
 static ui_state_t state = UI_MAIN;
+static bool menu_back;                       /* CSN / VER were opened from the SETTINGS menu */
+static bool ee_ok;                           /* stock work params valid at boot (VERSION screen) */
 static float smeter_lvl;                    /* stock 0x200006b8 smoothing state */
 static int smeter_peak, smeter_hold;
 static uint16_t scope_state[SCOPE_COLS];     /* smoothed column heights (stock 0x20002408) */
@@ -166,6 +196,11 @@ static bool memory_mode(void)
 static vfo_t *cur(void)
 {
     return memory_mode() ? &mem_work : &wp.vfo[wp.cur_vfo];
+}
+
+static float tx_drive(int idx)
+{
+    return cur()->mode == MODE_AM ? tx_power_am[idx] : tx_power[idx];
 }
 
 static int mode_class(int mode)
@@ -251,23 +286,49 @@ static int filt_group(int mode)
     }
 }
 
-static void apply_mode(void)
+/* CW band-pass and own FILT; safe while transmitting (no routing / mode change). */
+static void apply_filters(void)
 {
-    static const int demod[MODE_COUNT] = {AUDIO_LSB, AUDIO_LSB, AUDIO_USB, AUDIO_USB,
-                                          AUDIO_CW, AUDIO_CWR, AUDIO_NFM, AUDIO_AM};
     static const float cw_bw[3] = {50, 250, 500};
-    codec_route_rx_iq();
-    audio_set_gain(1.0f);
     audio_set_cw_filter(stock_settings.cw_tone, cw_bw[stock_settings.cw_filter]);
     /* Own FILT per mode group (RX and TX share the taps); NFM from 300 Hz: no CTCSS hum. */
     int fg = filt_group(cur()->mode);
     audio_set_rx_filter(fg == FILT_NFM ? 300 : 20, (fg < 0 ? filt_hi[FILT_SSB] : filt_hi[fg]) * 100.0f);
+}
+
+static void apply_mode(void)
+{
+    static const int demod[MODE_COUNT] = {AUDIO_LSB, AUDIO_LSB, AUDIO_USB, AUDIO_USB,
+                                          AUDIO_CW, AUDIO_CWR, AUDIO_NFM, AUDIO_AM};
+    codec_route_rx_iq();
+    audio_set_gain(1.0f);
+    apply_filters();
     audio_set_mode(demod[cur()->mode]);
     apply_freq();                       /* LO offset depends on the mode */
 }
 
+/* Band of the stock per-band TX IQ table (0x08038bb8): <2, 2-4, 4-7, 7-10, 10-14, 14-18, 18-21,
+ * 21-24, 24-28, 28-30 MHz. Stock's first entry starts at 5.5 MHz (a typo: nothing matches below
+ * 2 MHz there); here band 0 covers everything below 2 MHz. */
+static int txiq_band(uint32_t f)
+{
+    static const uint32_t lim[9] = {2000000, 4000000, 7000000, 10000000, 14000000, 18000000,
+                                    21000000, 24000000, 28000000};
+    int b = 0;
+    while (b < 9 && f >= lim[b])
+        b++;
+    return b;
+}
+
+static void apply_txiq(void)
+{
+    const int16_t *c = stock_settings.tx_iq[txiq_band(tx_freq())];
+    audio_set_tx_iq(c[0], c[1]);
+}
+
 static void apply_freq(void)
 {
+    apply_txiq();
     rf_set_freq_lo(txing ? tx_freq() : cur()->freq, lo_offset());
     if (!memory_mode())
         wp.band = band_slot_of(cur()->freq);
@@ -390,7 +451,6 @@ bool radio_tx_active(void)
 
 int radio_tx_start(int signal, int power_idx)
 {
-    static const float power[3] = {0.2f, 0.4f, 1.0f};      /* stock 0x10000080 */
     if (txing)
         return 0;
     if (state == UI_FM)
@@ -406,7 +466,7 @@ int radio_tx_start(int signal, int power_idx)
     if (power_idx < 0 || power_idx > 2)
         power_idx = wp.dsp_opt;
     audio_tx_ramp(false);
-    audio_set_tx(power[power_idx], stock_settings.tx_dc_i, stock_settings.tx_dc_q);
+    audio_set_tx(tx_drive(power_idx), stock_settings.tx_dc_i, stock_settings.tx_dc_q);
     rf_set_freq_lo(tx_freq(), 0);       /* TX: no CW / AM LO offset */
     bool data = cur()->mode == MODE_LD || cur()->mode == MODE_UD;
     audio_set_tx_source(data);
@@ -602,7 +662,7 @@ void radio_init(void)
 {
     rf_init();
     spectrum_init();
-    settings_load();
+    ee_ok = settings_load() == 0;
     boot_screen();
     if (memory_mode()) {
         int ch = memory_find(wp.mem_ch, 0);
@@ -615,12 +675,15 @@ void radio_init(void)
     }
     audio_set_mic_eq(mic_eq[0] - 12, mic_eq[1] - 12, mic_eq[2] - 12);
     audio_set_comp(comp_level);
+    audio_set_am_mod(am_mod);
     audio_set_agc(agc_mode);
     keyer_init();
     apply_keyer();
     apply_volume();
     apply_preamp();
     apply_pb0();
+    apply_contrast();
+    vc_set_ref_cal(freq_cal);
     apply_all();
     fm_init();                          /* stock boot: FM chip muted */
     if (wp.flags & WP_FLAG_FM)          /* stock ui_task: WFM survives power cycles */
@@ -882,7 +945,8 @@ static void draw_csn(bool blink)
 static void csn_key(int code)
 {
     if (code == KEY_F1) {
-        state = UI_MAIN;
+        state = menu_back ? UI_MENU : UI_MAIN;
+        menu_back = false;
     } else if (code == KEY_F2 || code == KEY_F3) {
         if (csn_len > 0)
             csn_buf[--csn_len] = 0;
@@ -892,7 +956,8 @@ static void csn_key(int code)
             csn_buf[csn_len] = 0;
         }
     } else if (code == KEY_F4) {
-        state = UI_MAIN;
+        state = menu_back ? UI_MENU : UI_MAIN;
+        menu_back = false;
         if (settings_write_callsign(csn_buf) < 0)
             msgbox("ERROR", "CAN'T SAVE!");
     }
@@ -908,16 +973,6 @@ static void csn_dial(int d)
         csn_cur = 9;
         csn_base = (csn_base + 1) % CSN_CHARS;
     }
-}
-
-static void draw_version(void)
-{
-    lcd_clear();
-    text_in_rect("-------VERSION-------", 0, 0, 127, 10);
-    text_in_rect("G106 open", 0, 19, 127, 29);
-    text_in_rect(__DATE__, 0, 28, 127, 38);
-    text_in_rect(__TIME__, 0, 37, 127, 47);
-    text_in_rect("Press any key to exit", 0, 53, 127, 63);
 }
 
 /* Stock apply functions 0x080333a8 ..: KS / KM / IMB / CWR (value name "2.0".. as a number) /
@@ -944,12 +999,32 @@ static void setting_set(const setting_t *s, int v)
         *(uint8_t *)s->var = v;
     else
         *(int16_t *)s->var = v;
-    if (s == &set_cw_tone || s == &set_cw_flt || (s >= set_filt && s < set_filt + FILT_COUNT))
-        apply_mode();                   /* DSP filters follow the filter settings */
+    /* DSP filters follow the filter settings; in TX (SETTINGS menu) only the taps change,
+     * the RX routing comes back with radio_tx_stop(). */
+    if (s == &set_cw_tone || s == &set_cw_flt || (s >= set_filt && s < set_filt + FILT_COUNT)) {
+        if (txing)
+            apply_filters();
+        else
+            apply_mode();
+    }
+    if (s == &set_mic_gain && txing)
+        codec_micpga(mic_gain);         /* live while talking from the SETTINGS menu */
+    if (s == &set_tx_power && txing)
+        audio_set_tx(tx_drive(wp.dsp_opt), stock_settings.tx_dc_i, stock_settings.tx_dc_q);
+    if (s == &set_contrast)
+        apply_contrast();
+    if (s == &set_freq_cal) {
+        vc_set_ref_cal(freq_cal);
+        apply_freq();                   /* LO again; TX-safe (same frequency, no routing) */
+    }
     if (s == &set_eq_low || s == &set_eq_mid || s == &set_eq_high)
         audio_set_mic_eq(mic_eq[0] - 12, mic_eq[1] - 12, mic_eq[2] - 12);
     if (s == &set_comp)
         audio_set_comp(comp_level);
+    if (s == &set_am_mod)
+        audio_set_am_mod(am_mod);
+    if (s == &set_am_tone)
+        audio_set_am_tone(am_tone);
     if (s == &set_mic_gain)
         param2.mic_gain = mic_gain > 30 ? 30 : mic_gain;   /* stock block: stock range only */
     if (s == &set_agc)
@@ -966,21 +1041,54 @@ static void open_edit(const setting_t *s)
     state = UI_EDIT;
 }
 
-static void close_edit(bool save)
+/* Apply and store a changed value (work params: at power-off, as stock). */
+static void commit_setting(const setting_t *s, int value, int orig)
 {
-    state = UI_MAIN;
-    if (!save || edit_value == edit_orig) {
-        setting_set(edit, edit_orig);
+    if (value == orig) {
+        setting_set(s, orig);
         return;
     }
-    setting_set(edit, edit_value);
-    int err = edit->store == ST_SETTINGS ? settings_save_settings()
-            : edit->store == ST_PARAM2 ? settings_save_param2()
-            : edit->store == ST_OWN ? settings_save_own() : 0;   /* work params: at power-off */
-    if (edit == &set_mic_gain && err >= 0)
+    setting_set(s, value);
+    int err = s->store == ST_SETTINGS ? settings_save_settings()
+            : s->store == ST_PARAM2 ? settings_save_param2()
+            : s->store == ST_OWN ? settings_save_own() : 0;
+    if (s == &set_mic_gain && err >= 0)
         err = settings_save_param2();
     if (err < 0)
         msgbox("ERROR", "CAN'T SAVE!");
+}
+
+static void close_edit(bool save)
+{
+    state = UI_MAIN;
+    if (!save) {
+        setting_set(edit, edit_orig);
+        return;
+    }
+    commit_setting(edit, edit_value, edit_orig);
+}
+
+/* Value text of a setting. */
+static void setting_text(const setting_t *s, int val, char *v, size_t n)
+{
+    if (s->names)
+        snprintf(v, n, "%s", s->names[val - s->min]);
+    else if (!strcmp(s->fmt, "%k"))
+        snprintf(v, n, "%d.%dkHz", val / 10, val % 10);
+    else if (!strcmp(s->fmt, "%z"))
+        snprintf(v, n, "%d.%dx", val / 10, val % 10);
+    else if (!strcmp(s->fmt, "%e"))
+        snprintf(v, n, "%+ddB", val - 12);
+    else if (!strcmp(s->fmt, "%o"))
+        snprintf(v, n, val ? "%d" : "OFF", val);
+    else if (!strcmp(s->fmt, "%r"))
+        snprintf(v, n, "%+d", val - (s->min + s->max) / 2);
+    else if (!strcmp(s->fmt, "%p"))
+        snprintf(v, n, "%c%d.%02dppm", val < 0 ? '-' : '+', abs(val) / 100, abs(val) % 100);
+    else if (!strcmp(s->fmt, "%h"))
+        snprintf(v, n, "%d.%ddB", val / 2, val % 2 * 5);
+    else
+        snprintf(v, n, s->fmt, val);
 }
 
 static void draw_edit(bool blink)
@@ -989,20 +1097,7 @@ static void draw_edit(bool blink)
     lcd_fill(0, 31, 127, 38, false);
     if (blink)
         lcd_text_f(&font8, 3, 31, edit->label, false);
-    if (edit->names)
-        snprintf(v, sizeof v, "%s", edit->names[edit_value - edit->min]);
-    else if (!strcmp(edit->fmt, "%k"))
-        snprintf(v, sizeof v, "%d.%dkHz", edit_value / 10, edit_value % 10);
-    else if (!strcmp(edit->fmt, "%z"))
-        snprintf(v, sizeof v, "%d.%dx", edit_value / 10, edit_value % 10);
-    else if (!strcmp(edit->fmt, "%e"))
-        snprintf(v, sizeof v, "%+ddB", edit_value - 12);
-    else if (!strcmp(edit->fmt, "%o"))
-        snprintf(v, sizeof v, edit_value ? "%d" : "OFF", edit_value);
-    else if (!strcmp(edit->fmt, "%h"))
-        snprintf(v, sizeof v, "%d.%ddB", edit_value / 2, edit_value % 2 * 5);
-    else
-        snprintf(v, sizeof v, edit->fmt, edit_value);
+    setting_text(edit, edit_value, v, sizeof v);
     lcd_text_f(&font8, 3 + lcd_text_width(&font8, edit->label), 31, v, false);
     draw_labels(mw_labels);             /* QUIT · · SAVE (stock 0x08038c8c) */
 }
@@ -1044,6 +1139,635 @@ static void toggle_vm(void)
         return;                                 /* no stored channel: stay in VFO mode */
     wp.flags |= WP_FLAG_MEMORY;
     memory_recall(ch);
+}
+
+/* ---- VERSION screen (own; stock VER only shows its version text): firmware version, build,
+ * live state for diagnostics. Tune encoder scrolls, any key goes back (as stock). ---- */
+#ifndef FW_VERSION
+#define FW_VERSION "dev"
+#endif
+#ifndef FW_COMMIT
+#define FW_COMMIT "?"
+#endif
+static int ver_top;
+static char ver_i2c[24];                     /* I2C devices that did not answer, probed on open */
+
+static void open_version(void)
+{
+    static const struct { int bus; uint8_t addr; const char *name; } dev[] = {
+        {I2C_BUS1, 0x6A, "VC"}, {I2C_BUS1, 0x50, "EE"}, {I2C_BUS1, 0x60, "FM"},
+        {I2C_BUS1, 0x2E, "POT"}, {I2C_BUS2, 0x18, "CODEC"},
+    };
+    ver_i2c[0] = 0;
+    for (unsigned k = 0; k < sizeof dev / sizeof dev[0]; k++)
+        if (i2c_probe(dev[k].bus, dev[k].addr) < 0)
+            snprintf(ver_i2c + strlen(ver_i2c), sizeof ver_i2c - strlen(ver_i2c), "%s%s",
+                     ver_i2c[0] ? " " : "NO ", dev[k].name);
+    ver_top = 0;
+    state = UI_VER;
+    panel_until = 0;
+}
+
+#define VER_ROWS 5                      /* rows after the title bar (version is in the title) */
+#define VER_VIS  5                      /* visible rows: no soft-key bar on this screen */
+static void ver_row(int i, char *v, size_t n, const char **label)
+{
+    static const char *const labels[VER_ROWS] = {"DATE", "DSP LOAD", "DSP RESETS",
+                                                 "EEPROM", "I2C"};
+    static const char mon[] = "JanFebMarAprMayJunJulAugSepOctNovDec";
+    static const char date[] = __DATE__, time[] = __TIME__;   /* "Nov 13 2026", "12:56:03" */
+    *label = labels[i];
+    switch (i) {
+    case 0: {
+        int m = 0;
+        while (m < 11 && strncmp(mon + 3 * m, date, 3))
+            m++;
+        snprintf(v, n, "%c%c.%02d.%c%c %.5s", date[4] == ' ' ? '0' : date[4], date[5], m + 1,
+                 date[9], date[10], time);
+        break;
+    }
+    case 1: {
+        uint32_t avg, max;
+        audio_cpu_load(&avg, &max);     /* since the last call: one draw period */
+        snprintf(v, n, "%lu%% / %lu%%", (unsigned long)avg, (unsigned long)max);
+        break;
+    }
+    case 2: {
+        uint32_t resets, first;
+        audio_dsp_faults(&resets, &first);
+        snprintf(v, n, "%lu", (unsigned long)resets);
+        break;
+    }
+    case 3: snprintf(v, n, ee_ok ? "OK" : "DEFAULTS"); break;
+    default: snprintf(v, n, "%s", ver_i2c[0] ? ver_i2c : "OK"); break;
+    }
+}
+
+static void draw_list_title(const char *text, int pos, int n);
+static void draw_scrollbar(int top, int n, int rows);
+
+static void draw_version(void)
+{
+    char v[24], t[28];
+    const char *label;
+    lcd_clear();
+    snprintf(t, sizeof t, "G106 OPEN %s", FW_VERSION);
+    draw_list_title(t, 0, 0);
+    for (int r = 0; r < VER_VIS && ver_top + r < VER_ROWS; r++) {
+        int y = 12 + 9 * r;
+        ver_row(ver_top + r, v, sizeof v, &label);
+        lcd_text_f(&font8, 4, y, label, false);
+        lcd_text_f(&font8, 119 - lcd_text_width(&font8, v), y, v, false);
+    }
+    draw_scrollbar(ver_top, VER_ROWS, VER_VIS);
+}
+
+/* ---- TX IQ CAL (stock "SYSTEM CAL" -> "1.TX IQ CAL", 0x08032e00), opened from SETTINGS > CAL.
+ * Stock edits the TX carrier-null DC offsets TXI / TXQ (settings +0x10 / +0x14, -1000000..1000000,
+ * live in the DSP): TUNE push = I / Q, tune encoder = value x MAG, BAND- / BAND+ = MAG x1..x1000
+ * (default x100), F1 BACK (asks "SAVE CHANGES?" NO / YES if anything changed), F2 TX on / off (TX without the microphone: only the carrier leakage
+ * is left), F3 CLR (the selected value = 0), F4 SAVE (settings block). Own additions:
+ *  - AMP / PHASE rows = the stock per-band TX IQ table (settings +0x18) for the band of the TX
+ *    frequency; stock never applies it, here it corrects the TX I/Q balance (audio_set_tx_iq).
+ *    TX on these rows sends a 1 kHz tone (USB, LSB in LSB / L-D / CWR): adjust for the least
+ *    opposite sideband (1 kHz on the other side of the carrier) on another receiver.
+ *  - Tune encoder = row cursor, TUNE push = edit the row (encoder = value), TUNE push again = done
+ *    (stock: encoder always edits, TUNE push toggles I / Q); PTT transmits like F2 while held.
+ *  - NO restores the old values (stock keeps the edited DC offsets live until power-off).
+ *  - Keys work in TX (stock polls them in its own loop). Leaving the screen ends TX. ---- */
+enum { CAL_DC_I, CAL_DC_Q, CAL_AMP, CAL_PHASE, CAL_ROWS };
+#define CAL_DC_MAX 1000000
+#define CAL_IQ_MAX 2000                 /* +-10 % / +-10 degrees */
+static int cal_row, cal_mag = 2, cal_band;
+static bool cal_tx, cal_edit, cal_confirm;           /* cal_edit: the tune encoder changes the value, not the row */
+static int32_t cal_orig_dc[2];
+static int16_t cal_orig_iq[2];
+static const char *const cal_band_names[10] = {"160m", "80m", "60m", "40m", "30m", "20m", "17m",
+                                               "15m", "12m", "10m"};
+
+static void open_txcal(void)
+{
+    cal_band = txiq_band(tx_freq());
+    cal_orig_dc[0] = stock_settings.tx_dc_i;
+    cal_orig_dc[1] = stock_settings.tx_dc_q;
+    cal_orig_iq[0] = stock_settings.tx_iq[cal_band][0];
+    cal_orig_iq[1] = stock_settings.tx_iq[cal_band][1];
+    cal_tx = cal_edit = cal_confirm = false;
+    state = UI_TXCAL;
+}
+
+/* TX signal of the screen: no modulation for the DC rows, a test tone for AMP / PHASE. */
+static int cal_signal(void)
+{
+    if (cal_row < CAL_AMP)
+        return AUDIO_TX_NULL;
+    int m = cur()->mode;
+    return m == MODE_LSB || m == MODE_LD || m == MODE_CWR ? AUDIO_TX_LSB : AUDIO_TX_USB;
+}
+
+static void cal_apply(void)
+{
+    audio_set_tx(tx_power[wp.dsp_opt], stock_settings.tx_dc_i, stock_settings.tx_dc_q);
+    apply_txiq();
+}
+
+static int32_t *cal_dc(int row)
+{
+    return row == CAL_DC_I ? &stock_settings.tx_dc_i : &stock_settings.tx_dc_q;
+}
+
+static void cal_dial(int d)
+{
+    static const int32_t mag[4] = {1, 10, 100, 1000};      /* stock step table 0x08038f2c */
+    int64_t step = (int64_t)d * mag[cal_mag];
+    if (cal_row < CAL_AMP) {
+        int64_t v = *cal_dc(cal_row) + step;
+        *cal_dc(cal_row) = v < -CAL_DC_MAX ? -CAL_DC_MAX : v > CAL_DC_MAX ? CAL_DC_MAX : (int32_t)v;
+    } else {
+        int16_t *p = &stock_settings.tx_iq[cal_band][cal_row - CAL_AMP];
+        int64_t v = *p + step;
+        *p = v < -CAL_IQ_MAX ? -CAL_IQ_MAX : v > CAL_IQ_MAX ? CAL_IQ_MAX : (int16_t)v;
+    }
+    cal_apply();
+}
+
+static void cal_close(bool save)
+{
+    cal_tx = false;
+    radio_tx_stop();
+    if (save) {
+        if (settings_save_settings() < 0)
+            msgbox("ERROR", "CAN'T SAVE!");
+    } else {
+        stock_settings.tx_dc_i = cal_orig_dc[0];
+        stock_settings.tx_dc_q = cal_orig_dc[1];
+        stock_settings.tx_iq[cal_band][0] = cal_orig_iq[0];
+        stock_settings.tx_iq[cal_band][1] = cal_orig_iq[1];
+        cal_apply();
+    }
+    if (state == UI_TXCAL)
+        state = UI_MENU;
+}
+
+static bool cal_changed(void)
+{
+    return stock_settings.tx_dc_i != cal_orig_dc[0] || stock_settings.tx_dc_q != cal_orig_dc[1] ||
+           stock_settings.tx_iq[cal_band][0] != cal_orig_iq[0] ||
+           stock_settings.tx_iq[cal_band][1] != cal_orig_iq[1];
+}
+
+static void cal_key(int code, bool lng)
+{
+    if (lng)
+        return;
+    if (cal_confirm) {                  /* "SAVE CHANGES?": NO = discard, YES = save, both leave */
+        if (code == KEY_F1)
+            cal_close(false);
+        else if (code == KEY_F4)
+            cal_close(true);
+        return;
+    }
+    switch (code) {
+    case KEY_TUNE_PUSH:
+        cal_edit = !cal_edit;
+        break;
+    case KEY_BAND_DOWN:
+        if (cal_mag > 0)
+            cal_mag--;
+        break;
+    case KEY_BAND_UP:
+        if (cal_mag < 3)
+            cal_mag++;
+        break;
+    case KEY_F1:                        /* BACK: ask only if something changed */
+        cal_edit = false;
+        if (cal_changed()) {
+            cal_tx = false;
+            cal_confirm = true;
+        } else {
+            cal_close(false);
+        }
+        break;
+    case KEY_F2:
+        cal_tx = !cal_tx;
+        break;
+    case KEY_F3:
+        if (cal_row < CAL_AMP)
+            *cal_dc(cal_row) = 0;
+        else
+            stock_settings.tx_iq[cal_band][cal_row - CAL_AMP] = 0;
+        cal_apply();
+        break;
+    case KEY_F4:
+        cal_close(true);
+        break;
+    default:
+        break;
+    }
+}
+
+/* TX in the cal screen (radio_poll): F2 toggle or PTT; the signal follows the selected row. */
+static void cal_poll_tx(bool ptt)
+{
+    bool on = cal_tx || ptt;
+    if (on && !txing) {
+        if (radio_tx_start(cal_signal(), -1) < 0)
+            cal_tx = false;
+    } else if (!on && txing) {
+        radio_tx_stop();
+    } else if (txing) {
+        audio_set_mode(cal_signal());
+    }
+}
+
+/* Value with 3 decimals: v x 5 thousandths (0.005 % / 0.005 degree units). */
+static void cal_fixed(int v, const char *unit, char *t, size_t n)
+{
+    int a = abs(v) * 5;
+    snprintf(t, n, "%c%d.%03d%s", v < 0 ? '-' : v > 0 ? '+' : ' ', a / 1000, a % 1000, unit);
+}
+
+static void menu_chevron(int x, int cy, bool on);
+static void menu_chevron_left(int x, int cy, bool on);
+
+static void draw_txcal(void)
+{
+    static const char *const l_cal[4] = {"BACK", "TX", "CLR", "SAVE"};     /* stock: QUIT */
+    static const char *const l_ask[4] = {"NO", " ", " ", "YES"};
+    static const char *const label[CAL_ROWS] = {"CARRIER I", "CARRIER Q", "AMPLITUDE", "PHASE"};
+    static const char *const mag_names[4] = {"x1", "x10", "x100", "x1000"};
+    char t[20];
+    lcd_clear();
+    /* title bar: name + band left, MAG and the TX flag right */
+    lcd_fill(0, 0, 127, 9, true);
+    snprintf(t, sizeof t, "TX IQ %s", cal_band_names[cal_band]);
+    lcd_text_f(&font8, 3, 1, t, true);
+    int x = 125;
+    if (txing) {
+        int w = lcd_text_width(&font8, "TX");
+        lcd_fill(123 - w, 1, 126, 8, false);
+        lcd_text_f(&font8, 125 - w, 1, "TX", false);
+        x = 120 - w;
+    }
+    lcd_text_f(&font8, x - lcd_text_width(&font8, mag_names[cal_mag]), 1, mag_names[cal_mag], true);
+
+    if (cal_confirm) {
+        lcd_text_f(&font8, (128 - lcd_text_width(&font8, "SAVE CHANGES?")) / 2, 24, "SAVE CHANGES?", false);
+        draw_labels(l_ask);
+        return;
+    }
+    for (int r = 0; r < CAL_ROWS; r++) {
+        int y = 11 + 9 * r;
+        bool on = r == cal_row;
+        if (r < CAL_AMP)
+            snprintf(t, sizeof t, "%ld", (long)*cal_dc(r));
+        else
+            cal_fixed(stock_settings.tx_iq[cal_band][r - CAL_AMP], r == CAL_AMP ? "%" : "deg", t,
+                      sizeof t);
+        bool ed = on && cal_edit;       /* editing: only the value box is inverted, with arrows */
+        if (on && !ed)
+            lcd_fill(0, y, 127, y + 8, true);
+        lcd_text_f(&font8, 4, y + 1, label[r], on && !ed);
+        int w = lcd_text_width(&font8, t);
+        if (ed) {
+            int bx = 120 - w;
+            lcd_fill(bx - 6, y, 126, y + 8, true);
+            lcd_text_f(&font8, bx, y + 1, t, true);
+            menu_chevron_left(bx - 5, y + 4, false);
+            menu_chevron(122, y + 4, false);
+        } else {
+            lcd_text_f(&font8, 124 - w, y + 1, t, on);
+        }
+    }
+    draw_labels(l_cal);
+}
+
+/* ---- SETTINGS menu (own): categories -> items. The own and advanced settings live here.
+ *   tune encoder: cursor (wraps); while editing: value (fast spin = x10 on wide ranges)
+ *   TUNE push / F4: open a category, edit a value in place, toggle an ON/OFF item, open CSN / VER
+ *   F1: back (category list -> main screen); while editing: QUIT (old value back)
+ *   F1 long: leave the menu at once
+ * Edited values are applied live; SAVE (F4 / TUNE push) stores them like the stock setting
+ * editor. The cursor position survives closing the menu. PTT / CAT PTT transmit from the menu
+ * (not in CW), so MIC GAIN / EQ / COMP / TX POWER / FILTER can be tuned while talking; keys are
+ * ignored in TX as everywhere, the tune encoder still edits. ---- */
+typedef enum { MI_SET, MI_PREAMP, MI_QSK, MI_BEEP, MI_BANDS, MI_CSN, MI_VER, MI_TXCAL } mi_kind_t;
+typedef struct {
+    const char *label;
+    mi_kind_t kind;
+    const setting_t *s;
+} mitem_t;
+typedef struct {
+    const char *name;
+    const mitem_t *items;
+    int n;
+} mcat_t;
+
+static const mitem_t mi_rx[] = {
+    {"SSB FILTER", MI_SET, &set_filt[FILT_SSB]}, {"DATA FILTER", MI_SET, &set_filt[FILT_DATA]},
+    {"AM FILTER", MI_SET, &set_filt[FILT_AM]}, {"NFM FILTER", MI_SET, &set_filt[FILT_NFM]},
+    {"AGC", MI_SET, &set_agc}, {"PREAMP", MI_PREAMP, NULL}, {"NFM SQUELCH", MI_SET, &set_sql},
+};
+static const mitem_t mi_tx[] = {
+    {"TX POWER", MI_SET, &set_tx_power}, {"MIC GAIN", MI_SET, &set_mic_gain},
+    {"COMPRESSOR", MI_SET, &set_comp}, {"EQ 300Hz", MI_SET, &set_eq_low},
+    {"EQ 1200Hz", MI_SET, &set_eq_mid}, {"EQ 2500Hz", MI_SET, &set_eq_high},
+    {"AM MOD", MI_SET, &set_am_mod}, {"AM TEST TONE", MI_SET, &set_am_tone},
+};
+static const mitem_t mi_cw[] = {
+    {"KEY SPEED", MI_SET, &set_key_speed}, {"KEY MODE", MI_SET, &set_key_mode},
+    {"IAMBIC", MI_SET, &set_iambic}, {"DOT:DASH", MI_SET, &set_cw_ratio},
+    {"CW TONE", MI_SET, &set_cw_tone}, {"CW FILTER", MI_SET, &set_cw_flt},
+    {"QSK", MI_QSK, NULL}, {"QSK DELAY", MI_SET, &set_qsk_time},
+};
+static const mitem_t mi_disp[] = {
+    {"SCOPE", MI_SET, &set_disp}, {"SCOPE ZOOM", MI_SET, &set_zoom}, {"CONTRAST", MI_SET, &set_contrast},
+};
+static const mitem_t mi_sys[] = {
+    {"KEY BEEP", MI_BEEP, NULL}, {"BANDS", MI_BANDS, NULL}, {"CALL SIGN", MI_CSN, NULL},
+    {"VERSION", MI_VER, NULL},
+};
+static const mitem_t mi_cal[] = {
+    {"TX IQ CAL", MI_TXCAL, NULL}, {"FREQ CAL", MI_SET, &set_freq_cal},
+};
+#define MCAT(n, a) {n, a, (int)(sizeof a / sizeof a[0])}
+static const mcat_t menu_cats[] = {
+    MCAT("RX", mi_rx), MCAT("TX", mi_tx), MCAT("CW", mi_cw), MCAT("DISPLAY", mi_disp),
+    MCAT("SYSTEM", mi_sys), MCAT("CAL", mi_cal),
+};
+#define MENU_CAT_CAL 5
+#define MENU_CATS ((int)(sizeof menu_cats / sizeof menu_cats[0]))
+#define MENU_ROWS 4
+
+static int menu_level;                  /* 0 categories, 1 items */
+static int menu_cat;                    /* category cursor / open category */
+static int menu_sel, menu_top;          /* item cursor and first visible item row */
+static bool menu_editing;
+
+static int menu_count(void)
+{
+    return menu_level ? menu_cats[menu_cat].n : MENU_CATS;
+}
+
+static int *menu_cursor_var(void)
+{
+    return menu_level ? &menu_sel : &menu_cat;
+}
+
+static int menu_first_row(void)
+{
+    return menu_level ? menu_top : (menu_cat >= MENU_ROWS ? menu_cat - MENU_ROWS + 1 : 0);
+}
+
+static void menu_cursor(int d)
+{
+    int n = menu_count(), *c = menu_cursor_var();
+    *c = ((*c + d) % n + n) % n;
+    if (menu_level) {
+        if (menu_sel < menu_top)
+            menu_top = menu_sel;
+        else if (menu_sel >= menu_top + MENU_ROWS)
+            menu_top = menu_sel - MENU_ROWS + 1;
+    }
+}
+
+static void menu_open_cat(int c)
+{
+    menu_cat = c;
+    menu_level = 1;
+    menu_sel = menu_top = 0;
+}
+
+static void open_menu(void)
+{
+    state = UI_MENU;                    /* back where the user left it */
+    menu_editing = false;
+    panel_until = 0;
+}
+
+static const mitem_t *menu_item(void)
+{
+    return &menu_cats[menu_cat].items[menu_sel];
+}
+
+/* The filter that is in use in the current mode (marked in the list). */
+static const setting_t *active_filter(void)
+{
+    int fg = filt_group(cur()->mode);
+    return fg < 0 ? &set_cw_flt : &set_filt[fg];
+}
+
+static void trim(char *s)
+{
+    size_t n = strlen(s);
+    while (n && s[n - 1] == ' ')
+        s[--n] = 0;
+    char *p = s;
+    while (*p == ' ')
+        p++;
+    memmove(s, p, strlen(p) + 1);
+}
+
+static void menu_value(const mitem_t *it, char *v, size_t n)
+{
+    if (it->s) {
+        setting_text(it->s, menu_editing && it->s == edit ? edit_value : setting_get(it->s), v, n);
+        trim(v);
+        return;
+    }
+    switch (it->kind) {
+    case MI_PREAMP: snprintf(v, n, preamp ? "ON" : "OFF"); break;
+    case MI_QSK: snprintf(v, n, wp.flags & WP_FLAG_QSK ? "ON" : "OFF"); break;
+    case MI_BEEP: snprintf(v, n, wp.flags & WP_FLAG_BEEP ? "ON" : "OFF"); break;
+    case MI_BANDS: snprintf(v, n, wp.flags & WP_FLAG_FULLBAND ? "FULL" : "HAM"); break;
+    default: v[0] = 0; break;
+    }
+}
+
+/* Small right-pointing triangle, 3 px wide, centred on cy. */
+static void menu_chevron(int x, int cy, bool on)
+{
+    for (int k = 0; k < 3; k++)
+        for (int y = cy - (2 - k); y <= cy + (2 - k); y++)
+            lcd_pixel(x + k, y, on);
+}
+
+static void menu_chevron_left(int x, int cy, bool on)
+{
+    for (int k = 0; k < 3; k++)
+        for (int y = cy - k; y <= cy + k; y++)
+            lcd_pixel(x + k, y, on);
+}
+
+/* List screens (SETTINGS, VERSION): inverted title bar, text left; on the right "TX" while
+ * transmitting, else "pos/n" (pos 0 = none). */
+static void draw_list_title(const char *text, int pos, int n)
+{
+    char t[12];
+    lcd_fill(0, 0, 127, 9, true);
+    lcd_text_f(&font8, 3, 1, text, true);
+    if (txing) {
+        int w = lcd_text_width(&font8, "TX");
+        lcd_fill(123 - w, 1, 126, 8, false);
+        lcd_text_f(&font8, 125 - w, 1, "TX", false);
+    } else if (pos) {
+        snprintf(t, sizeof t, "%d/%d", pos, n);
+        lcd_text_f(&font8, 125 - lcd_text_width(&font8, t), 1, t, true);
+    }
+}
+
+/* Scroll bar at the right edge of the MENU_ROWS list rows (y 11..46), if needed. */
+static void draw_scrollbar(int top, int n, int rows)
+{
+    if (n <= rows)
+        return;
+    int h = rows * 9 - 1;
+    for (int y = 11; y <= 11 + h; y += 2)
+        lcd_pixel(126, y, true);
+    int th = h * rows / n < 4 ? 4 : h * rows / n;
+    int ty = 11 + (h + 1 - th) * top / (n - rows);
+    lcd_fill(125, ty, 127, ty + th - 1, true);
+}
+
+static void draw_menu(void)
+{
+    static const char *const l_cat[4] = {"EXIT", " ", " ", "OPEN"};
+    static const char *const l_item[4] = {"BACK", " ", " ", "EDIT"};
+    static const char *const l_tog[4] = {"BACK", " ", " ", "SET"};
+    static const char *const l_open[4] = {"BACK", " ", " ", "OPEN"};
+    char t[28], v[20];
+    int n = menu_count(), top = menu_first_row(), sel = *menu_cursor_var();
+
+    lcd_clear();
+    /* title bar: path left, TX flag / cursor position right */
+    snprintf(t, sizeof t, menu_level ? "SETTINGS>%s" : "SETTINGS", menu_cats[menu_cat].name);
+    draw_list_title(t, 0, 0);
+
+    for (int r = 0; r < MENU_ROWS && top + r < n; r++) {
+        int i = top + r, y = 11 + 9 * r;
+        bool on = i == sel;
+        bool editing = on && menu_editing;
+        if (on && !editing)
+            lcd_fill(0, y, 121, y + 8, true);
+        if (!menu_level) {
+            lcd_text_f(&font8, 4, y + 1, menu_cats[i].name, on);
+            menu_chevron(115, y + 4, !on);
+            continue;
+        }
+        const mitem_t *it = &menu_cats[menu_cat].items[i];
+        if (it->s && it->s == active_filter())      /* the filter in use: dot before the label */
+            lcd_fill(0, y + 3, 1, y + 5, !on || editing);
+        lcd_text_f(&font8, 4, y + 1, it->label, on && !editing);
+        if (it->kind == MI_CSN || it->kind == MI_VER || it->kind == MI_TXCAL) {
+            menu_chevron(115, y + 4, !on);
+            continue;
+        }
+        menu_value(it, v, sizeof v);
+        int w = lcd_text_width(&font8, v);
+        if (editing) {
+            /* only the value is inverted, as a spin box with arrows where it can still move */
+            int bx = 115 - w;
+            lcd_fill(bx - 6, y, 121, y + 8, true);
+            lcd_text_f(&font8, bx, y + 1, v, true);
+            if (edit_value > edit->min)
+                menu_chevron_left(bx - 5, y + 4, false);
+            if (edit_value < edit->max)
+                menu_chevron(117, y + 4, false);
+        } else {
+            lcd_text_f(&font8, 119 - w, y + 1, v, on);
+        }
+    }
+
+    draw_scrollbar(top, n, MENU_ROWS);
+
+    if (menu_editing) {
+        draw_labels(mw_labels);                     /* QUIT · · SAVE */
+    } else if (!menu_level) {
+        draw_labels(l_cat);
+    } else {
+        mi_kind_t k = menu_item()->kind;
+        draw_labels(k == MI_SET ? l_item : k == MI_CSN || k == MI_VER || k == MI_TXCAL ? l_open : l_tog);
+    }
+}
+
+static void menu_end_edit(bool save)
+{
+    menu_editing = false;
+    if (save)
+        commit_setting(edit, edit_value, edit_orig);
+    else
+        setting_set(edit, edit_orig);
+}
+
+static void menu_activate(void)
+{
+    if (!menu_level) {
+        menu_open_cat(menu_cat);
+        return;
+    }
+    const mitem_t *it = menu_item();
+    if (it->s) {
+        edit = it->s;
+        edit_value = edit_orig = setting_get(it->s);
+        menu_editing = true;
+        return;
+    }
+    switch (it->kind) {
+    case MI_PREAMP:
+        preamp = !preamp;
+        apply_preamp();
+        break;
+    case MI_QSK:
+        wp.flags ^= WP_FLAG_QSK;
+        apply_keyer();
+        break;
+    case MI_BEEP:
+        wp.flags ^= WP_FLAG_BEEP;
+        break;
+    case MI_BANDS:
+        wp.flags ^= WP_FLAG_FULLBAND;
+        break;
+    case MI_CSN:
+        menu_back = true;
+        open_csn();
+        break;
+    case MI_VER:
+        menu_back = true;
+        open_version();
+        break;
+    case MI_TXCAL:
+        open_txcal();
+        break;
+    default:
+        break;
+    }
+}
+
+static void menu_key(int code, bool lng)
+{
+    if (lng) {
+        if (code == KEY_F1) {           /* F1 long: straight back to the main screen */
+            if (menu_editing)
+                menu_end_edit(false);
+            state = UI_MAIN;
+        }
+        return;
+    }
+    if (menu_editing) {
+        if (code == KEY_F1)
+            menu_end_edit(false);
+        else if (code == KEY_F4 || code == KEY_TUNE_PUSH)
+            menu_end_edit(true);
+        return;
+    }
+    if (code == KEY_F1) {
+        if (menu_level)
+            menu_level = 0;             /* the category cursor stays on the closed category */
+        else
+            state = UI_MAIN;
+    } else if (code == KEY_F4 || code == KEY_TUNE_PUSH) {
+        menu_activate();
+    }
 }
 
 static void softkey(int k, bool lng)
@@ -1092,19 +1816,15 @@ static void softkey(int k, bool lng)
         open_edit(fg < 0 ? &set_cw_flt : &set_filt[fg]);
         break;
     }
-    case 21: open_edit(&set_zoom); break;         /* ZOOM (own page 6) */
-    case 22: open_edit(&set_agc); break;          /* AGC (own page 6) */
-    case 23: open_edit(&set_sql); break;          /* SQL (own page 6) */
-    case 24: open_edit(&set_eq_low); break;       /* page 7: mic EQ */
-    case 25: open_edit(&set_eq_mid); break;
-    case 26: open_edit(&set_eq_high); break;
-    case 27: open_edit(&set_comp); break;         /* page 7: speech compressor */
+    case 21: open_edit(&set_agc); break;          /* AGC (own page 6) */
+    case 22: open_edit(&set_sql); break;          /* SQL (own page 6) */
+    case 23: open_menu(); break;                  /* SETT: SETTINGS menu (own) */
     case 14:                            /* BP */
         wp.flags ^= WP_FLAG_BEEP;
         popup(wp.flags & WP_FLAG_BEEP ? "BEEP ON" : "BEEP OFF");
         break;
-    case 15:                            /* VER */
-        state = UI_VER;
+    case 15:                            /* VER (own screen) */
+        open_version();
         break;
     case 16:                            /* WFM */
         fm_enter();
@@ -1292,6 +2012,16 @@ static void draw(void)
         return;
     }
 
+    if (state == UI_MENU) {
+        draw_menu();
+        lcd_flush();
+        return;
+    }
+    if (state == UI_TXCAL) {
+        draw_txcal();
+        lcd_flush();
+        return;
+    }
     if (state == UI_CSN) {
         draw_csn(blink);
         lcd_flush();
@@ -1400,7 +2130,12 @@ static void handle_key(int ev)
     if (state == UI_FM) {
         fm_key(code);
     } else if (state == UI_VER || state == UI_MSGBOX) {
-        state = UI_MAIN;
+        state = state == UI_VER && menu_back ? UI_MENU : UI_MAIN;
+        menu_back = false;
+    } else if (state == UI_MENU) {
+        menu_key(code, lng);
+    } else if (state == UI_TXCAL) {
+        cal_key(code, lng);
     } else if (state == UI_EDIT) {
         if (!lng && code == KEY_F1)
             close_edit(false);
@@ -1451,6 +2186,19 @@ static void handle_key(int ev)
     dirty = true;
 }
 
+/* Setting editor / SETTINGS menu value change. Wide ranges (CW TONE, QSK TIME: 500..1000
+ * values) step x10 while the dial is spun fast (detents < 50 ms apart); own, stock steps by 1. */
+static void edit_spin(int d, uint32_t now)
+{
+    static uint32_t last;
+    if (edit != &set_freq_cal && edit != &set_am_mod && edit->max - edit->min >= 100 && (now - last < 50 || d > 1 || d < -1))
+        d *= 10;                        /* FREQ CAL: always 0.01 ppm */
+    last = now;
+    int v = edit_value + d;
+    edit_value = v < edit->min ? edit->min : v > edit->max ? edit->max : v;
+    setting_set(edit, edit_value);
+}
+
 static void tune(int d, uint32_t now)
 {
     if (state == UI_FM) {
@@ -1458,10 +2206,20 @@ static void tune(int d, uint32_t now)
             return;                     /* stock ignores the dial while seeking */
         int64_t f = (int64_t)wp.fm_freq + (int64_t)d * FM_STEP;
         fm_tune(f < FM_MIN ? FM_MIN : f > FM_MAX ? FM_MAX : (uint32_t)f);
-    } else if (state == UI_EDIT) {
-        int v = edit_value + d;
-        edit_value = v < edit->min ? edit->min : v > edit->max ? edit->max : v;
-        setting_set(edit, edit_value);  /* stock applies live, restores on QUIT */
+    } else if (state == UI_EDIT || (state == UI_MENU && menu_editing)) {
+        edit_spin(d, now);              /* stock applies live, restores on QUIT */
+    } else if (state == UI_MENU) {
+        menu_cursor(d > 0 ? 1 : -1);
+    } else if (state == UI_TXCAL) {
+        if (cal_confirm)
+            return;
+        if (cal_edit)
+            cal_dial(d);
+        else
+            cal_row = ((cal_row + (d > 0 ? 1 : -1)) % CAL_ROWS + CAL_ROWS) % CAL_ROWS;
+    } else if (state == UI_VER) {
+        int t = ver_top + (d > 0 ? 1 : -1);
+        ver_top = t < 0 ? 0 : t > VER_ROWS - VER_VIS ? VER_ROWS - VER_VIS : t;
     } else if (state == UI_CSN) {
         csn_dial(d);
     } else if (state == UI_MW) {
@@ -1528,7 +2286,9 @@ void radio_poll(void)
     int m = cur()->mode;
     bool cw = m == MODE_CW || m == MODE_CWR;
     keyer_enable(cw && state == UI_MAIN);
-    if (cw) {
+    if (state == UI_TXCAL) {
+        cal_poll_tx(want_tx);
+    } else if (cw) {
         /* CW (stock radio_trx_task + keyer): the paddles request TX, the keyer ramps the carrier
          * and stays "active" for the QSK time after the last element. PTT / CAT PTT only
          * switch the T/R relays (no carrier without the key), as stock. */
@@ -1540,7 +2300,7 @@ void radio_poll(void)
             keyer_set_ready(false);
             radio_tx_stop();
         }
-    } else if (want_tx && !txing && state == UI_MAIN) {
+    } else if (want_tx && !txing && (state == UI_MAIN || state == UI_MENU)) {
         int sig = m == MODE_AM ? AUDIO_TX_AM : m == MODE_NFM ? AUDIO_TX_NFM
                 : (m == MODE_USB || m == MODE_UD) ? AUDIO_TX_SSB_U : AUDIO_TX_SSB_L;
         radio_tx_start(sig, -1);
@@ -1556,9 +2316,9 @@ void radio_poll(void)
 
     int ev;
     while ((ev = input_key_event()) >= 0) {
-        if (txing)                      /* keys are ignored in TX */
+        if (txing && state != UI_TXCAL) /* keys are ignored in TX (not in TX IQ CAL, as stock) */
             continue;
-        if (wp.flags & WP_FLAG_BEEP)
+        if ((wp.flags & WP_FLAG_BEEP) && !txing)
             beep(2000, 20);
         handle_key(ev);
     }
@@ -1580,4 +2340,15 @@ void radio_poll(void)
         last_draw = now;
         draw();
     }
+}
+
+/* CI-V 1D 01 (Xiegu): stock opens its SYSTEM CAL menu (0x080330b0) from the main loop; here the
+ * SETTINGS > CAL category. Only from the main screen in RX. */
+void radio_cat_syscal(void)
+{
+    if (txing || state != UI_MAIN)
+        return;
+    menu_open_cat(MENU_CAT_CAL);
+    open_menu();
+    dirty = true;
 }

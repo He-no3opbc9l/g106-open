@@ -7,6 +7,15 @@
 #define VC_FB_INT  111u                         /* VCO = 2886 MHz */
 #define VC_VCO_HZ  (VC_XTAL_HZ * VC_FB_INT)
 
+/* Own FREQ CAL: crystal error in 0.01 ppm (positive = the crystal runs fast). The VCO is an
+ * integer multiple of the crystal, so the output dividers are computed from the real VCO. */
+static double vco_hz = VC_VCO_HZ;
+
+void vc_set_ref_cal(int cppm)
+{
+    vco_hz = (double)VC_VCO_HZ * (1.0 + cppm * 1e-8);
+}
+
 /* Register image written by stock at power-up (flash 0x08039894): reg address 0, then
  * registers 0x00..0x69. Kept verbatim. */
 static const uint8_t vc_image[0x6B] = {
@@ -63,7 +72,7 @@ int vc_set_output(int ch, uint32_t freq_hz)
 {
     if (ch < 1 || ch > 4 || !freq_hz)
         return -1;
-    double div = (double)VC_VCO_HZ * 0.5 / freq_hz;
+    double div = vco_hz * 0.5 / freq_hz;
     uint32_t idiv = (uint32_t)div;
     uint32_t frac = (uint32_t)((div - idiv) * 16777216.0 + 0.5);
 

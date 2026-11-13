@@ -141,6 +141,9 @@ int settings_save_param2(void)
 #define OWN_MAGIC3  0x33504F47u     /* "GOP3": v3, CRC over 4 words (+ mic gain, AGC) */
 #define OWN_MAGIC4  0x34504F47u     /* "GOP4": v4, CRC over 4 words (+ NFM squelch) */
 #define OWN_MAGIC5  0x35504F47u     /* "GOP5": v5, CRC over 5 words (+ filters DATA / AM / NFM) */
+#define OWN_MAGIC6  0x36504F47u     /* "GOP6": v6, CRC over 5 words (+ LCD contrast) */
+#define OWN_MAGIC7  0x37504F47u     /* "GOP7": v7, CRC over 6 words (+ FREQ CAL) */
+#define OWN_MAGIC8  0x38504F47u     /* "GOP8": v8, CRC over 6 words (+ AM MOD in the former pad2) */
 typedef struct {
     uint32_t magic;
     uint8_t preamp;
@@ -152,10 +155,12 @@ typedef struct {
     uint8_t mic_gain;           /* v3: MICPGA 0..60 (0.5 dB); param2 holds min(this, 30) */
     uint8_t agc;                /* v3: AGC_OFF..AGC_HARD */
     uint8_t nfm_sql;            /* v4: NFM squelch 0..30 (S-meter threshold, 2 dB steps) */
-    uint8_t pad;
+    uint8_t contrast;           /* v6: LCD contrast 0..20, 10 = stock (v1..v5: pad, 0) */
     uint8_t filt[3];            /* v5: FILT DATA / AM / NFM */
-    uint8_t pad2;
-    uint32_t crc;               /* v1: word 2, v2: word 3, v3/v4: word 4, v5: word 5 */
+    uint8_t am_mod;             /* v8: AM modulation depth 0..100 % (v1..v7: pad, 0) */
+    int16_t freq_cal;           /* v7: reference crystal error, 0.01 ppm */
+    uint8_t pad3[2];
+    uint32_t crc;               /* v1: word 2, v2: word 3, v3/v4: word 4, v5/v6: word 5, v7: word 6 */
 } own_block_t;
 
 uint8_t filt_hi[FILT_COUNT] = {27, 30, 40, 30};
@@ -165,13 +170,17 @@ uint8_t comp_level;
 uint8_t mic_gain = 20;
 uint8_t agc_mode = AGC_HARD;
 uint8_t nfm_sql = 9;
+uint8_t lcd_contrast_lvl = CONTRAST_STOCK;
+uint8_t am_mod = AM_MOD_DEFAULT;
+int16_t freq_cal;
 
 int settings_save_own(void)
 {
-    own_block_t own = {OWN_MAGIC5, preamp, filt_hi[FILT_SSB], (uint8_t)wp.page, scope_zoom,
+    own_block_t own = {OWN_MAGIC8, preamp, filt_hi[FILT_SSB], (uint8_t)wp.page, scope_zoom,
                        {mic_eq[0], mic_eq[1], mic_eq[2]}, comp_level, mic_gain, agc_mode,
-                       nfm_sql, 0, {filt_hi[FILT_DATA], filt_hi[FILT_AM], filt_hi[FILT_NFM]}, 0, 0};
-    own.crc = crc_words(&own, 5);
+                       nfm_sql, lcd_contrast_lvl, {filt_hi[FILT_DATA], filt_hi[FILT_AM], filt_hi[FILT_NFM]}, am_mod,
+                       freq_cal, {0, 0}, 0};
+    own.crc = crc_words(&own, 6);
     return ee_write(EE_OWN, &own, sizeof own);
 }
 
@@ -309,7 +318,10 @@ int settings_load(void)
     const uint32_t *ow = (const uint32_t *)&own;
     bool own_ok = false;
     if (ee_read(EE_OWN, &own, sizeof own) == 0) {
-        bool v5 = own.magic == OWN_MAGIC5 && crc_words(&own, 5) == ow[5];
+        bool v8 = own.magic == OWN_MAGIC8 && crc_words(&own, 6) == ow[6];
+        bool v7 = v8 || (own.magic == OWN_MAGIC7 && crc_words(&own, 6) == ow[6]);
+        bool v6 = v7 || (own.magic == OWN_MAGIC6 && crc_words(&own, 5) == ow[5]);
+        bool v5 = v6 || (own.magic == OWN_MAGIC5 && crc_words(&own, 5) == ow[5]);
         bool v4 = v5 || (own.magic == OWN_MAGIC4 && crc_words(&own, 4) == ow[4]);
         bool v3 = v4 || (own.magic == OWN_MAGIC3 && crc_words(&own, 4) == ow[4]);
         bool v2 = own.magic == OWN_MAGIC2 && crc_words(&own, 3) == ow[3];
@@ -334,13 +346,19 @@ int settings_load(void)
                 if (own.filt[k] >= 20 && own.filt[k] <= max[k])
                     filt_hi[FILT_DATA + k] = own.filt[k];
         }
+        if (v6)
+            lcd_contrast_lvl = own.contrast <= CONTRAST_MAX ? own.contrast : CONTRAST_STOCK;
+        if (v7)
+            freq_cal = own.freq_cal >= -FREQ_CAL_MAX && own.freq_cal <= FREQ_CAL_MAX ? own.freq_cal : 0;
+        if (v8)
+            am_mod = own.am_mod <= 100 ? own.am_mod : AM_MOD_DEFAULT;
     }
     if (own_ok) {
         preamp = own.preamp & 1;
         filt_hi[FILT_SSB] = own.ssb_filter_hi < 20 ? 20 : own.ssb_filter_hi <= 60 ? own.ssb_filter_hi : 27;
         scope_zoom = own.scope_zoom >= 10 && own.scope_zoom <= 30 ? own.scope_zoom : 10;
-        if (own.page >= 5 && own.page <= 6 && wp.page == 4)
-            wp.page = own.page;                 /* our pages 6/7 survive power cycles */
+        if (own.page == 5 && wp.page == 4)
+            wp.page = own.page;                 /* our page 6 survives power cycles */
     } else {
         preamp = wp.vfo[wp.cur_vfo].flags & 1;
     }

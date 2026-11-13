@@ -98,7 +98,7 @@ CRC = STM32 hardware CRC unit: poly 0x04C11DB7, init 0xFFFFFFFF, 32-bit words, n
 
 Encoder 0 tunes (step table 0x0803113c, limits 550 kHz..30 MHz) or selects memory channel in
 memory mode; key combo 0x406 toggles lock; 0x202 (tune push) -> 0x08031a98; other keys ->
-0x08031d88. Periodic redraw: 0x08033400, 0x08031688. TX IQ CAL menu entry 0x08038c2c.
+0x08031d88. Periodic redraw: 0x08033400, 0x08031688. SYSTEM CAL item table 0x08038c2c (see SYSTEM CAL below).
 
 ## Keys (0x08031d88) — short press acts on release, long press after ~1 s
 
@@ -231,6 +231,9 @@ Stock AM TX (DMA ISR, mode 7, 48 kHz, no decimation): mic sample -> 4-biquad ban
 (0x0803873c, +5.5 dB, ~50 Hz..5 kHz) -> x 0.476 (table +0x60) + 0.5 -> 5-biquad low-pass
 (0x08038914, +6 dB, cut ~4.5 kHz) -> x 0.05 x 0.495 -> I = Q, x power. No limiter / ALC:
 modulation = 1.8 x the raw mic sample (100 % at mic 0.28 FS), carrier 0.0248 FS x power.
+Stock AM uses the same power factors as CW (0.2 / 0.4 / 1.0), so on HIGH the carrier alone is near
+PA saturation and upward modulation is lost (open firmware, 1 kHz AM test tone at 50 %: loud on LOW,
+almost inaudible on HIGH). Own: AM drive 0.2 / 0.3 / 0.4.
 Shift registers (filters) need slow bit-banging (~1 µs per phase).
 
 ## CAT (CI-V)
@@ -266,6 +269,32 @@ Shift registers (filters) need slow bit-banging (~1 µs per phase).
 - Data flag (0x2000037d bit0) is kept in sync in radio_trx_task: a mode change sets it to
   "mode is L-D/U-D"; a flag change (1A 06) converts LSB<->L-D, USB<->U-D.
 - Own implementation: `src/cat.c` (deviations listed there).
+
+## SYSTEM CAL / TX IQ CAL (0x080330b0 / 0x08032e00)
+
+- Entry: only via CAT. CI-V `1D 01` (handler 0x0802eb00) sets bit0 of the CAT struct flags; the
+  parser (0x08021f1c) turns it into 0x2000044b = 1, and ui_task (end of 0x080341cc) then calls
+  0x080330b0 with the item table 0x08038c2c: {" 1.TX IQ CAL", 0x08032e01}, {" 2.EXIT", 0x08033231}.
+- SYSTEM CAL list: font8 "-----SYSTEM CAL-----" @(3,0), items from y 9 in 8 px steps, ">" @(0,y)
+  on the selected one, tune encoder = cursor, TUNE push = run the item, F1 = exit (redraws the main
+  screen). Labels 0x08038cc8 {QUIT, " ", " ", " "}.
+- TX IQ CAL (0x08032e00): "----- TXIQ CAL -----" @(3,0); " TXI:" value @(0,9), " TXQ:" @(0,18),
+  ">" on the selected row; "MAG:x<step>" @(0,36); "RX" / "TX" @(0,45). Labels 0x08038d7c
+  {QUIT, TX, CLR, SAVE}. Values = settings +0x10 / +0x14 (0x20001fd4/8), range -1000000..1000000,
+  written live into the DSP (0x10000018/1c, added << 8 to the int32 I/Q output samples).
+  Keys: TUNE push toggles I/Q; BAND- / BAND+ = MAG index 0..3 (step table 0x08038f2c: 1, 10, 100,
+  1000; starts at 2); F1 QUIT (no save; the edited values stay live in the DSP until power-off);
+  F2 toggles 0x2000031b = TX request without the microphone routing (radio_trx_task skips
+  0x0802c2b0(1)), i.e. only the carrier leakage is transmitted; F3 CLR (selected value = 0, also in
+  the settings copy); F4 SAVE (settings block + CRC, "ERROR / CAN'T SAVE!" for 5 s on failure).
+  The radio's factory values: TXI -48500, TXQ -26200.
+- Per-band TX IQ table (settings +0x18, 10 x {i16 amp, i16 phase}, band limits 0x08038bb8:
+  5.5 (sic) / 2 / 4 / 7 / 10 / 14 / 18 / 21 / 24 / 28 MHz): no UI writes it (defaults 0). On a band
+  change 0x08033400 calls 0x0802e994(amp, phase): 0x1000006c = 1 + amp x 5e-5,
+  0x10000064 = sin(phase x 0.005 deg), 0x10000068 = 1/cos - 1 (0 if |phase| >= 60 deg). Nothing reads
+  0x10000064..6c: the correction is dead code in V1.4b01.
+- Open firmware: SETTINGS > CAL > TX IQ CAL (CAT `1D 01` opens SETTINGS > CAL) with the stock DC rows
+  and the per-band AMP / PHASE rows actually applied (I x (1 + amp x 5e-5), Q x 1/cos + I x sin).
 
 ## CSN: call sign editor (0x0803186c -> editor 0x08033dec)
 

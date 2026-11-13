@@ -32,6 +32,11 @@ all: $(BUILD)/$(TARGET).bin $(BUILD)/$(TARGET).xgf
 $(BUILD)/main.o $(BUILD)/radio.o: FORCE
 FORCE:
 
+# VERSION screen: last tag (+ commits since it, "+" = uncommitted changes) and the commit.
+FW_VERSION := $(shell git describe --tags --dirty=+ 2>/dev/null | sed 's/-g[0-9a-f]*//')
+FW_COMMIT  := $(shell git rev-parse --short=7 HEAD 2>/dev/null)
+$(BUILD)/radio.o: CFLAGS += -DFW_VERSION='"$(or $(FW_VERSION),dev)"' -DFW_COMMIT='"$(or $(FW_COMMIT),?)"'
+
 $(BUILD)/%.o: src/%.c | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 

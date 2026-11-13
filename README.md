@@ -23,7 +23,7 @@ between stock and this firmware). On top of that come improvements to the DSP an
 Working on the radio:
 
 - Main screen with the stock UI (original fonts and icons are taken from the official firmware at
-  build time, see below; the boot logo and power-off screen are our own), tuning, bands, V/M, A/B, memories (MW / MC), VER, message boxes.
+  build time, see below; the boot logo and power-off screen are our own), tuning, bands, V/M, A/B, memories (MW / MC), message boxes.
 - Stock power key behaviour (short press: backlight, hold 2 s: power-off screen and save).
 - Setting editor: CWF CWT CWR QSK KS KM IMB DIS MG TXP; call sign editor (CSN) as stock, the call
   sign is shown on the boot screen (default "G106 OPEN").
@@ -45,17 +45,22 @@ Deliberate differences from stock:
 | | |
 |---|---|
 | FILT | RX/TX audio filter, own width per mode group: SSB, DATA (L-D/U-D), AM 2.0–6.0 kHz, NFM 2.0–3.0 kHz; low cut 20 Hz (NFM 300 Hz); in CW it opens CWF (soft-key page 6) |
-| ZOOM | spectrum zoom 1.0–3.0× (page 6) |
+| SCOPE ZOOM | spectrum zoom 1.0–3.0× (SETTINGS menu) |
 | AGC | OFF / SOFT / MED / HARD (HARD = stock, OFF = fixed gain) (page 6) |
 | MIC GAIN | 0..60 = 0..+30 dB in 0.5 dB steps (stock: 0..30) |
-| Mic EQ, COMP | 3-band mic equaliser and compressor (page 7); data modes bypass them |
+| Mic EQ, COMP | 3-band mic equaliser and compressor (SETTINGS menu); data modes bypass them |
+| SETTINGS | menu (SETT soft key, page 6) with categories RX, TX, CW, DISPLAY, SYSTEM, CAL: all own and advanced settings; PTT works inside it for live mic/TX adjustments |
+| VER | own screen: firmware version, build date, uptime, DSP load, EEPROM / I2C state |
+| CONTRAST | LCD contrast (SETTINGS menu) |
+| TX IQ CAL | SETTINGS > CAL (stock: hidden SYSTEM CAL menu, CAT `1D 01`, which also opens it here): carrier null TXI / TXQ as stock, plus TX I/Q amplitude / phase per band (stock keeps this table but never applies it); F2 transmits without modulation (carrier rows) or a 1 kHz tone (AMP / PHASE rows), BAND-/BAND+ = step, F3 = clear, BACK asks "SAVE CHANGES?" (NO restores the old values) |
+| FREQ CAL | reference crystal correction ±50 ppm in 0.01 ppm steps (SETTINGS > CAL; stock has none) |
 | Preamp | global, not per VFO/band |
 | TX switching | 10 ms relay delay + 10 ms ramps, no band limits |
-| AM TX | mic +12 dB before the limiter (≤ 90 % modulation) |
+| AM TX | mic ×8 → RMS leveller, modulation depth AM MOD 0–100 % of the RMS (default 90 %, SETTINGS > TX; peaks clipped to an envelope of 0..1); AM drive LOW/MID/HIGH = 0.2/0.3/0.4 (stock 0.2/0.4/1.0: on HIGH the carrier sits in PA saturation and the modulation is crushed), envelope peak on HIGH ≈ the CW MID level (carrier ~1 W); AM TEST TONE = 1 kHz tone at exactly AM MOD for checking |
+| NFM TX | speech compressor always on (≥ +20 dB) + limiter (±2.5 kHz) |
 | NFM | enabled in the MODE cycle (stock lists it but disables it): ±2.5 kHz deviation, 6 dB/oct pre-/de-emphasis; SQL = squelch OFF / 1..30 by the S-meter level (2 dB per step), its threshold is shown as an arrow over the S-meter (page 6) |
 
-Not done yet (stock parity): TX I/Q
-correction and calibration menus, power/SWR metering, factory reset.
+Not done yet (stock parity): power/SWR metering, factory reset.
 
 ## Download
 

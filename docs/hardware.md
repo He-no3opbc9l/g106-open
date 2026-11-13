@@ -92,6 +92,8 @@ Used areas: 0x0000, 0x0400–0x05FF, 0x0800, 0x0C00, 0x1000.
 
 - **128×64 monochrome LCD**, UltraChip **UC1609-family** command set
   (init: `E2, 2F, 81 38, EB, C7, 40, AF`). Page mode: `B0+page, 10, 00` then 128 data bytes.
+  `81 xx` = contrast (potentiometer); stock keeps it fixed at 0x38, our CONTRAST setting sends
+  `0x38 + 2 * level` (level −10..+10, own EEPROM block v6).
 - SPI1 TX-only mode 0, 10.5 MHz: PB3 SCK, PB5 MOSI. **PB4 = CS** (active low),
   **PD2 = CD/A0** (0 cmd, 1 data), **PA12 = RST** (held high), **PC11 = backlight** (likely).
 - Stock framebuffer at `0x20002998` (8 × 128 B, bit 0 = top row), refreshed one page per tick.

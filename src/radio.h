@@ -22,6 +22,7 @@ bool radio_tx_active(void);
 
 /* CAT (cat.c). VFO index: 0 = A, 1 = B. */
 bool radio_cat_can_tune(void);          /* false in TX / WFM: no frequency, mode or VFO changes */
+void radio_cat_syscal(void);            /* CI-V 1D 01: open SETTINGS > CAL (stock SYSTEM CAL) */
 uint32_t radio_vfo_freq(int v);
 int radio_vfo_mode(int v);
 void radio_set_vfo(int v, uint32_t freq, int mode);    /* freq 0 / mode < 0 = keep */

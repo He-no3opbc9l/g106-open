@@ -20,7 +20,8 @@
  *   1A 03 / 1A 06       filter width (read) / data mode (L-D, U-D)
  *   1C 00               PTT: TX in SSB, AM, NFM like the PTT input; dropped if no frame
  *                       arrives for CAT_PTT_MS (stock does this too)
- *   1D 01 / 1D 19 / 1D 02 01 xx   Xiegu: ok / 19 01 06 / PB0 output (volume push)
+ *   1D 01 / 1D 19 / 1D 02 01 xx   Xiegu: SYSTEM CAL (opens SETTINGS > CAL, as stock opens its
+ *                       calibration menu) / 19 01 06 / PB0 output (volume push)
  *   21 00/01/02         RIT offset / RIT / delta-TX: only stored, as stock
  *   25 / 26             frequency / mode of the selected (00) or unselected (01) VFO
  *
@@ -356,6 +357,8 @@ static int command(void)
         }
         if (len == 3 && sub == 0x02 && data[1] == 0x01)
             radio_set_pb0(data[2]);
+        if (len == 1 && sub == 0x01)
+            radio_cat_syscal();
         return R_OK;
 
     case 0x21:                                  /* RIT: stored only, as stock */

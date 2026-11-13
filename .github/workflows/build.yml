@@ -32,6 +32,12 @@ jobs:
         arm-none-eabi-gcc --version | head -1
 
     - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0          # tags + history: make puts `git describe` on the VERSION screen
+
+    # The container runs as root on a checkout owned by another uid: let git read it
+    - name: Git safe directory
+      run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
     # The official stock firmware (fonts/icons are extracted from it). make downloads it and checks
     # its sha256; the cache only saves the download between runs.

@@ -7,6 +7,8 @@
 
 int vc_init(void);
 int vc_set_output(int ch, uint32_t freq_hz);
+/* Own FREQ CAL: reference crystal error in 0.01 ppm; takes effect with the next vc_set_output. */
+void vc_set_ref_cal(int cppm);
 int vc_read(uint8_t reg, uint8_t *buf, unsigned n);   /* diagnostics */
 
 #endif

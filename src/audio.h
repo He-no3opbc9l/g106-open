@@ -29,6 +29,7 @@ typedef enum {
     AUDIO_TX_SSB_L,     /* TX voice/data: lower sideband */
     AUDIO_TX_AM,        /* TX AM: carrier + modulation */
     AUDIO_TX_NFM,       /* TX NFM: pre-emphasis, 2.5 kHz peak deviation, constant carrier */
+    AUDIO_TX_NULL,      /* TX IQ CAL: no modulation, only the DC offsets (carrier leakage) */
 } audio_mode_t;
 
 int audio_start(void);          /* I2S + DMA armed; call before codec_init() (codec = clock master) */
@@ -43,11 +44,17 @@ float audio_agc_gain(void);
  * int32 units / 256), ramp state. tx_level() is the current ramp 0..1. */
 void audio_set_tx(float power, int32_t dc_i, int32_t dc_q);
 void audio_tx_ramp(bool up);            /* 10 ms ramp, as stock CW keying */
+/* TX I/Q balance (stock per-band TX IQ table, settings +0x18, stock scaling 0x0802e994):
+ * amplitude in 0.005 % (I x (1 + amp x 5e-5)), phase in 0.005 degrees (Q += I x sin, Q x 1/cos).
+ * Stock computes these values but never applies them; here they act on all TX signals. */
+void audio_set_tx_iq(int amp, int phase);
 /* Own: mic equaliser (TX, microphone only), each band -12..+12 dB:
  * low shelf 300 Hz, peak 1.2 kHz, high shelf 2.5 kHz. */
 void audio_set_mic_eq(int low_db, int mid_db, int high_db);
 /* Own: speech compressor 0 = off .. 10 (max boost 2 dB per step), microphone only. */
 void audio_set_comp(int level);
+void audio_set_am_mod(int pct);           /* AM TX modulation depth 0..100 % (of the RMS level) */
+void audio_set_am_tone(bool on);          /* diagnostic: AM TX tone 1 kHz at AM MOD */
 /* TX audio source: false = microphone (left ADC), true = line/data input (right ADC). */
 void audio_set_tx_source(bool data);
 float audio_tx_level(void);

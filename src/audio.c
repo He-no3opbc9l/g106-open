@@ -85,6 +85,30 @@ void audio_set_tx(float power, int32_t dc_i, int32_t dc_q)
     tx_dc_q = (float)dc_q * 256.0f / 2147483648.0f;
 }
 
+/* TX I/Q balance: I x tx_iq_g, Q x tx_iq_k + I x tx_iq_s (applied before the DC offsets). */
+static volatile float tx_iq_g = 1.0f, tx_iq_s, tx_iq_k = 1.0f;
+
+void audio_set_tx_iq(int amp, int phase)
+{
+    float ph = phase * 0.005f * (PI_F / 180.0f);
+    float g = 1.0f + amp * 5e-5f, s = 0, k = 1.0f;
+    if (phase && fabsf(phase * 0.005f) < 60.0f) {           /* stock: >= 60 degrees = off */
+        s = sinf(ph);
+        k = 1.0f / cosf(ph);
+    }
+    __disable_irq();
+    tx_iq_g = g;
+    tx_iq_s = s;
+    tx_iq_k = k;
+    __enable_irq();
+}
+
+static inline void tx_out(float i, float q, float *oi, float *oq)
+{
+    *oi = i * tx_iq_g + tx_dc_i;
+    *oq = q * tx_iq_k + i * tx_iq_s + tx_dc_q;
+}
+
 void audio_tx_ramp(bool up)
 {
     tx_ramp_up = up;
@@ -104,6 +128,8 @@ static void tx_sample(audio_mode_t m, float *oi, float *oq)
     float a = 0.045f * tx_ramp * tx_power, i = 0, q = 0;
     if (m == AUDIO_TX_CARRIER) {
         i = q = a;
+    } else if (m == AUDIO_TX_NULL) {
+        i = q = 0;
     } else {
         float amp = a * 1.41421356f;
         tx_phase += 2 * PI_F * 1000.0f / AUDIO_FS;
@@ -113,8 +139,7 @@ static void tx_sample(audio_mode_t m, float *oi, float *oq)
         q = (m == AUDIO_TX_USB ? amp : -amp) * sinf(tx_phase);
     }
     spec_push(i, q);                    /* same orientation as the RX front end */
-    *oi = i + tx_dc_i;
-    *oq = q + tx_dc_q;
+    tx_out(i, q, oi, oq);
 }
 
 /* ===================== multirate RX chain =====================
@@ -749,11 +774,32 @@ static unsigned typos;
 static float alc_env, alc_gain = 1.0f;
 static volatile float tx_peak;                  /* peak before the limiter (diag) */
 
-/* Own: extra mic gain in AM. A receiver's AGC holds the AM carrier, so the audio level there is
- * the modulation depth: speech peaking at 20-30 % (fine for SSB, where the receiving AGC follows
- * the peaks) was very quiet. Stock modulates 0.95 x the mic sample with no limiter; here the
- * gain is raised and the peak limiter keeps the modulation at <= 90 %. */
-#define AM_TX_GAIN 4.0f                         /* +12 dB */
+/* Own: NFM always runs the speech compressor (at least +20 dB, target 0.8 of full scale): the
+ * deviation is the received audio level, and speech held only by the peak limiter averages
+ * 12-15 dB below the peak (~+/-400 Hz). The limiter keeps the peaks at +/-2.5 kHz. */
+#define NFM_MIN_GAIN  10.0f                     /* +20 dB */
+#define NFM_TARGET    0.8f
+
+/* AM modulator as in "G106 OPEN 1.0.2" (third-party fork, AM MOD 0..100 %, default 90 %): mic x 8, then an
+ * RMS leveller (mean square attack 0.02 / release 0.0005, gain <= 1 towards a sine-equivalent
+ * peak of 0.99, gain fall 0.1 / rise 0.002), envelope = 0.5 + 0.5 x AM MOD x signal. Speech peaks
+ * go past 100 %: that fork lets the envelope go negative, here it is clipped to 0..1 (no phase
+ * reversal). The peak limiter is not used in AM: it held the average at ~8 % depth. */
+#define AM_IN_GAIN    8.0f
+static volatile float am_mod = 0.9f;          /* AM MOD setting, 0..1 */
+static float am_ms, am_g = 1.0f;
+static volatile bool am_tone;                   /* diagnostic: 1 kHz sine instead of the mic */
+static float am_tone_ph;
+
+void audio_set_am_tone(bool on)
+{
+    am_tone = on;
+}
+
+void audio_set_am_mod(int pct)
+{
+    am_mod = (pct < 0 ? 0 : pct > 100 ? 100 : pct) * 0.01f;
+}
 
 float audio_tx_peak(void)
 {
@@ -818,14 +864,14 @@ void audio_set_comp(int level)
     comp_max_gain = level > 0 ? powf(10.0f, 2.0f * level / 20.0f) : 1.0f;
 }
 
-static float compress(float y)
+static float compress(float y, float max_gain, float target)
 {
     float ay = fabsf(y);
     comp_env += (ay - comp_env) * (ay > comp_env ? 0.06f : 0.0004f);
     if (comp_env > 0.003f) {                    /* ~-50 dB gate */
-        float g = 0.5f / comp_env;
-        if (g > comp_max_gain)
-            g = comp_max_gain;
+        float g = target / comp_env;
+        if (g > max_gain)
+            g = max_gain;
         if (g < 1.0f)
             g = 1.0f;
         comp_g += (g - comp_g) * (g < comp_g ? 0.05f : 0.0008f);
@@ -853,14 +899,41 @@ static void tx16(audio_mode_t m, float x, float *oi, float *oq)
     float y = dot_sym(bpf, &tabuf[tapos], BPF_N) * 4.0f;   /* +12 dB make-up */
     if (!tx_data_src && !eq_flat)
         y = eq_run(&eq[2], eq_run(&eq[1], eq_run(&eq[0], y)));
-    if (!tx_data_src && comp_max_gain > 1.0f)
-        y = compress(y);
-    if (m == AUDIO_TX_AM)
-        y *= AM_TX_GAIN;
+    if (!tx_data_src) {
+        float mg = comp_max_gain;
+        if (m == AUDIO_TX_NFM) {
+            if (mg < NFM_MIN_GAIN)
+                mg = NFM_MIN_GAIN;
+            y = compress(y, mg, NFM_TARGET);
+        } else if (mg > 1.0f) {
+            y = compress(y, mg, 0.5f);
+        }
+    }
     if (m == AUDIO_TX_NFM) {                    /* pre-emphasis (zero at 300 Hz), 1 at 1 kHz */
         float e = (y - emph_p * fm_pre_x) / ((1 - emph_p) * emph_norm);
         fm_pre_x = y;
         y = e;
+    }
+    if (m == AUDIO_TX_AM) {
+        float x = y * AM_IN_GAIN, p = x * x;
+        am_ms += (p - am_ms) * (p > am_ms ? 0.02f : 0.0005f);
+        float r = sqrtf(2.0f * am_ms), g = r > 0.99f ? 0.99f / r : 1.0f;
+        am_g += (g - am_g) * (g < am_g ? 0.1f : 0.002f);
+        x *= am_g;
+        if (am_tone) {                          /* exactly AM MOD, no leveller / clipping */
+            am_tone_ph += 1000.0f / FS2;
+            if (am_tone_ph >= 1.0f)
+                am_tone_ph -= 1.0f;
+            float s, c;
+            fast_sincos(am_tone_ph, &s, &c);
+            x = s;
+        }
+        if (fabsf(x) > tx_peak)
+            tx_peak = fabsf(x);
+        float v = 0.5f + 0.5f * am_mod * x;                   /* carrier 1/2 */
+        v = v < 0 ? 0 : v > 1 ? 1 : v;
+        *oi = *oq = v * 0.70710678f;
+        return;
     }
     float ay = fabsf(y);
     if (ay > tx_peak)
@@ -869,11 +942,6 @@ static void tx16(audio_mode_t m, float x, float *oi, float *oq)
     alc_gain = alc_env > 1.0f ? 1.0f / alc_env : 1.0f;
     y *= alc_gain;
 
-    if (m == AUDIO_TX_AM) {
-        float v = 0.5f + 0.45f * y;                          /* carrier 1/2, 90 % modulation */
-        *oi = *oq = v * 0.70710678f;
-        return;
-    }
     if (m == AUDIO_TX_NFM) {                    /* |y| <= 1 -> +/-2.5 kHz; full carrier */
         fm_phase += y * (NFM_DEV / FS2);
         fm_phase -= floorf(fm_phase);
@@ -922,8 +990,7 @@ static void tx48(audio_mode_t m, float l, float r, float *oi, float *oq)
     tx_ramp += tx_ramp_up ? 1.0f / 480 : -1.0f / 480;
     tx_ramp = tx_ramp < 0 ? 0 : tx_ramp > 1 ? 1 : tx_ramp;
     float a = 0.0636396f * tx_ramp * tx_power;              /* = |(0.045, 0.045)| */
-    *oi = i * a + tx_dc_i;
-    *oq = q * a + tx_dc_q;
+    tx_out(i * a, q * a, oi, oq);
 }
 
 /* Diagnostic capture of raw I/Q (L = I, R = Q). */
@@ -971,7 +1038,8 @@ static void dsp_state_reset(void)
     agc_db = agc_peak = agc_hold_peak = 0;
     agc_env = 1e-4f;
     agc_g = 1.0f;
-    tx_dc = tx_prev = alc_env = comp_env = 0;
+    tx_dc = tx_prev = alc_env = comp_env = am_ms = 0;
+    am_g = 1.0f;
     alc_gain = comp_g = 1.0f;
 }
 
@@ -1045,6 +1113,7 @@ static void process(const volatile uint16_t *in, volatile uint16_t *out)
         case AUDIO_TX_CARRIER:
         case AUDIO_TX_USB:
         case AUDIO_TX_LSB:
+        case AUDIO_TX_NULL:
             tx_sample(m, &ol, &or_);
             break;
         case AUDIO_TX_SSB_U:

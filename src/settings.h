@@ -67,7 +67,7 @@ typedef struct {
     uint8_t _pad0d[3];
     int32_t tx_dc_i;        /* +0x10 TX carrier-null DC offset I (x256 int32 units) */
     int32_t tx_dc_q;        /* +0x14 Q */
-    int16_t tx_iq[10][2];   /* +0x18 per-band TX IQ cal {amplitude, phase} (TX IQ CAL) */
+    int16_t tx_iq[10][2];   /* +0x18 per-band TX IQ {amp 0.005 %, phase 0.005 deg}; unused by stock */
     uint32_t crc;
 } stock_settings_t;
 
@@ -104,6 +104,15 @@ extern uint8_t comp_level;              /* own setting: speech compressor 0 (off
 extern uint8_t mic_gain;                /* own setting: MICPGA 0..60 (0.5 dB), stock MG <= 30 */
 extern uint8_t agc_mode;                /* own setting: AGC_OFF..AGC_HARD (audio.h) */
 extern uint8_t nfm_sql;                 /* own setting: NFM squelch 0 (open)..30, 2 dB steps on the S-meter */
+/* Own setting: LCD contrast level 0..CONTRAST_MAX, CONTRAST_STOCK = stock register value 0x38. */
+#define CONTRAST_MAX   20
+#define CONTRAST_STOCK 10
+extern uint8_t lcd_contrast_lvl;
+/* Own setting FREQ CAL: VersaClock reference crystal error in 0.01 ppm (+-50 ppm). */
+#define FREQ_CAL_MAX 5000
+extern int16_t freq_cal;
+#define AM_MOD_DEFAULT 90
+extern uint8_t am_mod;                  /* own setting: AM TX modulation depth 0..100 % */
 
 /* Returns 0 if the stock work params were valid (CRC ok), <0 if defaults were used. */
 int settings_load(void);

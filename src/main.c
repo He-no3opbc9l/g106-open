@@ -10,6 +10,7 @@
 #include "audio.h"
 #include "radio.h"
 #include "cat.h"
+#include "keyer.h"
 
 #define POWER_OFF_HOLD_MS 2000         /* stock 0x20000774 = 2000 ticks */
 
@@ -17,6 +18,7 @@ static void ticks_1ms(void)
 {
     input_tick_1ms();
     beep_tick_1ms();
+    keyer_tick_1ms();
 }
 
 int main(void)

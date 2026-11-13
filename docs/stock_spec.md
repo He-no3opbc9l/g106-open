@@ -278,3 +278,24 @@ scrolls the strip at the ends. Keys: tune push (0x202) appends the character (ma
 0x12-byte record to EEPROM 0x0500 (`0xAA, len, chars`; empty text = `0, 0`), on failure the box
 "ERROR / CAN'T SAVE!" for 5 s. Stock stores `base + cursor + 0x20` without the modulo (wrong characters
 in the wrapped part of the strip); ours stores what is shown.
+
+## CW keyer and CW TX (stock 0x080272b4 tick, 0x0802221c key out, 0x080221fc paddles)
+
+A generic keyer state machine (struct at 0x20002008) is ticked from the TIM2 1 ms interrupt. Fields:
++4 paddle callback (PA6 low = bit0 dot, PA7 low = bit1 dash), +0xC KS WPM (5..100), +0x10 KM (0 MAN,
+1 AUTO-L, 2 AUTO-R = paddle bits swapped), +0x14 IMB (1 = mode B), +0x34 QSK time, +0x40 dot ms =
+1200 / WPM (float), +0x44 dash ratio (CWR "2.0".."4.0" parsed with atof, clamped 2..4).
+- MAN: either paddle = key down.
+- Iambic: at the end of an element (on-time and gap both 0) the next one is chosen: remembered
+  opposite element first, else both paddles -> the opposite of the last element (dot first), one
+  paddle -> its element. Dot: on `dot - 5` ms, gap `dot + 5` ms; dash: on `dash - 5`, gap `dot + 5`
+  (dash = int(dot x ratio)). Mode B: while an element runs, the opposite paddle sets a memory
+  (the next element is the opposite one); mode A samples the paddles only between elements.
+- Hang: every key-on tick sets hang = QSK time and +0x30 "active" = 1; when idle with no paddle the
+  hang counts down, then 10 more ms, then active = 0. active (0x2000032f) requests TX in
+  radio_trx_task together with PTT / CAT PTT.
+- Key out (0x0802221c): CCM 0x10000044 = 0.5 / 0; on the edges the sidetone (TIM1 CH4 beeper at the
+  CWT frequency, 0x08027504) starts / stops.
+- DSP (modes 4 / 5, 48 kHz): envelope e += / -= 1/960 per sample (0 .. 0.5, 10 ms ramps), I = Q =
+  e x 0.09 x power factor (+ DC offsets); LO = f in TX (CW -tone / CWR +tone only in RX).
+- PTT in CW mode: T/R relays only (no carrier without the key).

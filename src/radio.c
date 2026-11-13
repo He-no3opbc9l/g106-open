@@ -22,6 +22,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
+#include "keyer.h"
 #include <math.h>
 #include "stm32f4.h"
 #include "system.h"
@@ -403,7 +404,7 @@ int radio_tx_start(int signal, int power_idx)
     pin(GPIOC, 5, true);                /* PA on */
     pin(GPIOC, 10, false);              /* LED red */
     pin(GPIOA, 15, true);
-    audio_tx_ramp(true);
+    audio_tx_ramp(signal != AUDIO_TX_CARRIER);     /* CW: the keyer ramps the carrier */
     txing = true;
     dirty = true;
     return 0;
@@ -569,6 +570,8 @@ static void boot_screen(void)
         ;
 }
 
+static void apply_keyer(void);
+
 void radio_init(void)
 {
     rf_init();
@@ -587,6 +590,8 @@ void radio_init(void)
     audio_set_mic_eq(mic_eq[0] - 12, mic_eq[1] - 12, mic_eq[2] - 12);
     audio_set_comp(comp_level);
     audio_set_agc(agc_mode);
+    keyer_init();
+    apply_keyer();
     apply_volume();
     apply_preamp();
     apply_pb0();
@@ -889,6 +894,18 @@ static void draw_version(void)
     text_in_rect("Press any key to exit", 0, 53, 127, 63);
 }
 
+/* Stock apply functions 0x080333a8 ..: KS / KM / IMB / CWR (value name "2.0".. as a number) /
+ * QSK time / CWT go to the keyer. */
+static void apply_keyer(void)
+{
+    keyer_set_speed(stock_settings.key_speed);
+    keyer_set_mode(stock_settings.key_mode);
+    keyer_set_iambic(stock_settings.iambic);
+    keyer_set_ratio(2.0f + 0.5f * stock_settings.cw_ratio);
+    keyer_set_hang(stock_settings.qsk_time);
+    keyer_set_tone(stock_settings.cw_tone);
+}
+
 static int setting_get(const setting_t *s)
 {
     return s->size == 1 ? *(uint8_t *)s->var : *(int16_t *)s->var;
@@ -910,6 +927,9 @@ static void setting_set(const setting_t *s, int v)
         param2.mic_gain = mic_gain > 30 ? 30 : mic_gain;   /* stock block: stock range only */
     if (s == &set_agc)
         audio_set_agc(agc_mode);
+    if (s == &set_cw_tone || s == &set_key_speed || s == &set_key_mode || s == &set_iambic ||
+        s == &set_cw_ratio || s == &set_qsk_time)
+        apply_keyer();
 }
 
 static void open_edit(const setting_t *s)
@@ -1464,7 +1484,21 @@ void radio_poll(void)
     }
     bool want_tx = ptt_state || cat_ptt();
     int m = cur()->mode;
-    if (want_tx && !txing && state == UI_MAIN && m != MODE_CW && m != MODE_CWR) {
+    bool cw = m == MODE_CW || m == MODE_CWR;
+    keyer_enable(cw && state == UI_MAIN);
+    if (cw) {
+        /* CW (stock radio_trx_task + keyer): the paddles request TX, the keyer ramps the carrier
+         * and stays "active" for the QSK time after the last element. PTT / CAT PTT only
+         * switch the T/R relays (no carrier without the key), as stock. */
+        bool req = keyer_request();
+        if ((want_tx || req) && !txing && state == UI_MAIN) {
+            radio_tx_start(AUDIO_TX_CARRIER, -1);
+            keyer_set_ready(true);
+        } else if (txing && !want_tx && !keyer_active()) {
+            keyer_set_ready(false);
+            radio_tx_stop();
+        }
+    } else if (want_tx && !txing && state == UI_MAIN) {
         int sig = m == MODE_AM ? AUDIO_TX_AM : m == MODE_NFM ? AUDIO_TX_NFM
                 : (m == MODE_USB || m == MODE_UD) ? AUDIO_TX_SSB_U : AUDIO_TX_SSB_L;
         radio_tx_start(sig, -1);

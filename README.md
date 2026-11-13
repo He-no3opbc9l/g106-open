@@ -30,7 +30,10 @@ Working on the radio:
 - RX: SSB, CW, AM, NFM. 48 kHz I/Q → DC block → adaptive I/Q balance → 16 kHz SSB phasing demodulator
   (191-tap Hilbert), CW biquad filters, AM envelope, NFM discriminator with de-emphasis and squelch, band-pass filter, dB AGC with look-ahead.
 - 1024-point FFT spectrum scope with zoom and an FFT-based S-meter.
-- TX: SSB, AM and NFM voice via PTT, data input for L-D / U-D (digital modes), carrier / tone for tests.
+- TX: SSB, AM and NFM voice via PTT, data input for L-D / U-D (digital modes).
+- CW TX as stock: iambic / straight keyer on the key jack (PA6 dot, PA7 dash; KS speed, KM MAN /
+  AUTO-L / AUTO-R, IMB mode A / B, CWR dash ratio), sidetone at the CWT pitch, 10 ms keying
+  ramps, QSK hang time. Not tested with a real key yet.
 - WFM broadcast receiver (built-in FM chip): seek and channels.
 - CAT: Icom CI-V protocol on USART1 like stock (19200 8N1), see [CAT](#cat).
 
@@ -48,7 +51,7 @@ Deliberate differences from stock:
 | AM TX | mic +12 dB before the limiter (≤ 90 % modulation) |
 | NFM | enabled in the MODE cycle (stock lists it but disables it): ±2.5 kHz deviation, 6 dB/oct pre-/de-emphasis; SQL = squelch OFF / 1..30 by the S-meter level (2 dB per step), its threshold is shown as an arrow over the S-meter (page 6) |
 
-Not done yet (stock parity): CW TX (keyer, sidetone, QSK), split, TX I/Q
+Not done yet (stock parity): split, TX I/Q
 correction and calibration menus, power/SWR metering, factory reset.
 
 ## Download
@@ -58,6 +61,7 @@ Ready-made images are built by GitHub Actions: tagged versions on the
 [Actions](https://github.com/He-no3opbc9l/g106-open/actions) (artifacts). The release zip
 holds the images; flash
 `g106_open-<version>.xgf` like an official update (see [Flashing](#flashing)); the `.bin` is for SWD.
+The easiest way is the [web flasher](https://he-no3opbc9l.github.io/xg-flasher/): it lists the releases itself.
 
 ## Building
 
@@ -81,6 +85,14 @@ and `stock/G106Fw-V1.4b01.txall.bin` (stock app with the TX band limit removed).
 `.xgf` files are plain AES-256-ECB; `tools/xgf.py enc|dec` uses the key in `tools/aes_key.hex`.
 
 ## Flashing
+
+### Web flasher (browser, only a USB-UART adapter)
+
+**https://he-no3opbc9l.github.io/xg-flasher/** — Chrome / Edge / Opera on a computer (Web Serial). Choose a release (or your own
+`.xgf`, a `.zip` holding one, e.g. the official Xiegu archive to go back to stock, or a raw `.bin`),
+choose the adapter's port, press *Flash* and switch the radio on holding the **volume** knob. The
+file is decrypted and checked before sending; the bootloader itself is never touched. Sources:
+[xg-flasher](https://github.com/He-no3opbc9l/xg-flasher).
 
 ### Via the stock bootloader (IAP, only a USB-UART adapter)
 

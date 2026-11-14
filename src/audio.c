@@ -24,6 +24,9 @@
 
 static volatile uint16_t rx_buf[2 * HALF_WORDS];
 static volatile uint16_t tx_buf[2 * HALF_WORDS];
+static volatile bool swap_in, swap_out;         /* debug menu: exchange L/R of the codec input / output */
+static volatile uint32_t i2s_restarts;
+static volatile int i2s_last;                   /* result of the last audio_i2s_restart() */
 
 static volatile audio_mode_t mode = AUDIO_OFF;
 static volatile float gain = 1.0f;
@@ -718,6 +721,68 @@ int audio_start(void)
     return 0;
 }
 
+void audio_set_swap(bool in, bool out)
+{
+    swap_in = in;
+    swap_out = out;
+}
+
+void audio_i2s_info(audio_i2s_info_t *o)
+{
+    o->rx_sr = REG32(I2S2_BASE + 0x08);
+    o->tx_sr = REG32(I2S2EXT_BASE + 0x08);
+    o->ws = GPIOB->IDR >> 12 & 1;
+    o->rx_pos = 2 * HALF_WORDS - DMA_S(RX_STREAM, 0x04);
+    o->tx_pos = 2 * HALF_WORDS - DMA_S(TX_STREAM, 0x04);
+    o->restarts = i2s_restarts;
+    o->last = i2s_last;
+    o->swap_in = swap_in;
+    o->swap_out = swap_out;
+}
+
+/* Re-synchronise both I2S slaves on the running codec clocks. RM0090: a Philips slave has to be
+ * enabled while WS is high, then it locks onto the next falling edge (= left channel first).
+ * Both are enabled back to back with interrupts off so that they see the same frame. */
+int audio_i2s_restart(void)
+{
+    volatile uint32_t *i2s = (volatile uint32_t *)I2S2_BASE;
+    volatile uint32_t *ext = (volatile uint32_t *)I2S2EXT_BASE;
+
+    REG32(0xE000E180) = 1u << 14;               /* NVIC ICER: DSP interrupt off */
+    i2s[7] &= ~(1u << 10);                      /* I2SE off */
+    ext[7] &= ~(1u << 10);
+    i2s[1] = 0;
+    ext[1] = 0;
+    for (unsigned k = 0; k < 2 * HALF_WORDS; k++)
+        tx_buf[k] = 0;
+    dma_setup(RX_STREAM, 0, 0, &i2s[3], rx_buf);
+    dma_setup(TX_STREAM, 2, 1, &ext[3], tx_buf);
+    DMA_LIFCR = 0x0F7D0F7D;
+    DMA_HIFCR = 0x0F7D0F7D;
+    DMA_S(RX_STREAM, 0x00) |= (1u << 4) | (1u << 3);
+    i2s[1] = 1u << 0;
+    ext[1] = 1u << 1;
+    DMA_S(TX_STREAM, 0x00) |= 1;
+    DMA_S(RX_STREAM, 0x00) |= 1;
+
+    int res = -1;
+    __disable_irq();
+    for (uint32_t n = 0; n < 40000; n++) {      /* ~1 ms; WS period is 20.8 us */
+        if (GPIOB->IDR & (1u << 12)) {
+            ext[7] |= 1u << 10;
+            i2s[7] |= 1u << 10;
+            res = 0;
+            break;
+        }
+    }
+    __enable_irq();
+    REG32(0xE000E280) = 1u << 14;               /* NVIC ICPR: drop a stale pending request */
+    REG32(0xE000E100) = 1u << 14;
+    i2s_restarts++;
+    i2s_last = res;
+    return res;
+}
+
 void audio_set_mode(audio_mode_t m)
 {
     agc_params(m, agc_speed);                   /* stock decay rates per mode, see agc_times */
@@ -1074,9 +1139,15 @@ static void process(const volatile uint16_t *in, volatile uint16_t *out)
 {
     float pl = peak_l, pr = peak_r, g = gain;
     audio_mode_t m = mode;
+    bool sw_in = swap_in, sw_out = swap_out;
 
     for (int i = 0; i < AUDIO_BLOCK; i++, in += 4, out += 4) {
         float l = in_sample(in), r = in_sample(in + 2);
+        if (sw_in) {
+            float t = l;
+            l = r;
+            r = t;
+        }
         if (cap_buf) {
             cap_buf[2 * cap_pos] = l;
             cap_buf[2 * cap_pos + 1] = r;
@@ -1124,6 +1195,11 @@ static void process(const volatile uint16_t *in, volatile uint16_t *out)
             break;
         default:
             break;
+        }
+        if (sw_out) {
+            float t = ol;
+            ol = or_;
+            or_ = t;
         }
         out_sample(out, ol);
         out_sample(out + 2, or_);

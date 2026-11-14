@@ -61,7 +61,7 @@ static void draw_caption(void)
     lcd_text_f(&font8, (128 - lcd_text_width(&font8, t)) / 2, 49 + (15 - font8.height) / 2, t, false);
 }
 
-typedef enum { UI_MAIN, UI_MW, UI_MC, UI_VER, UI_MSGBOX, UI_EDIT, UI_FM, UI_CSN, UI_MENU, UI_TXCAL } ui_state_t;
+typedef enum { UI_MAIN, UI_MW, UI_MC, UI_VER, UI_MSGBOX, UI_EDIT, UI_FM, UI_CSN, UI_MENU, UI_TXCAL, UI_DEBUG } ui_state_t;
 
 /* Stock setting editor descriptor (0x080313a0): range, label, value text, storage. */
 typedef enum { ST_SETTINGS, ST_PARAM2, ST_WORKPARAMS, ST_OWN } store_t;
@@ -1770,9 +1770,102 @@ static void menu_key(int code, bool lng)
     }
 }
 
+
+/* ---- DEBUG menu (own): hold the VER soft key (page 4, F4) for 3 s on the main screen. Live I2S /
+ * codec diagnostics for the "I/Q swapped after power-on" problem, plus actions: IN / OUT SWAP
+ * exchange L/R of the codec input (RX I/Q, TX mic) / output (TX I/Q), RESTART re-locks the I2S
+ * slaves on the running codec clocks. Nothing is stored: every power-on starts clean. Tune
+ * encoder = cursor, F4 / TUNE push = run the action, F1 (or F1 long) = back. ---- */
+enum { DBG_SWAP_IN, DBG_SWAP_OUT, DBG_RESTART, DBG_WS, DBG_SR, DBG_POS, DBG_LOAD, DBG_RESETS, DBG_ROWS };
+static int dbg_sel;
+static bool debug_armed;                /* the VER soft key got its long event: a 3 s hold opens DEBUG */
+
+static void open_debug(void)
+{
+    dbg_sel = 0;
+    state = UI_DEBUG;
+    panel_until = 0;
+}
+
+static void dbg_row(int i, char *v, size_t n, const char **label)
+{
+    static const char *const labels[DBG_ROWS] = {"IN SWAP", "OUT SWAP", "I2S RESTART", "WS / CHSIDE",
+                                                 "SR RX/TX", "POS RX/TX", "DSP LOAD", "DSP RESETS"};
+    audio_i2s_info_t in;
+    audio_i2s_info(&in);
+    *label = labels[i];
+    switch (i) {
+    case DBG_SWAP_IN: snprintf(v, n, in.swap_in ? "ON" : "OFF"); break;
+    case DBG_SWAP_OUT: snprintf(v, n, in.swap_out ? "ON" : "OFF"); break;
+    case DBG_RESTART:
+        snprintf(v, n, "%lu %s", (unsigned long)in.restarts,
+                 !in.restarts ? "-" : in.last ? "NO WS" : "OK");
+        break;
+    case DBG_WS: snprintf(v, n, "%d / %lu", in.ws, (unsigned long)(in.rx_sr >> 2 & 1)); break;
+    case DBG_SR: snprintf(v, n, "%03lX/%03lX", (unsigned long)in.rx_sr, (unsigned long)in.tx_sr); break;
+    case DBG_POS: snprintf(v, n, "%lu/%lu", (unsigned long)in.rx_pos, (unsigned long)in.tx_pos); break;
+    case DBG_LOAD: {
+        uint32_t avg, max;
+        audio_cpu_load(&avg, &max);
+        snprintf(v, n, "%lu%% / %lu%%", (unsigned long)avg, (unsigned long)max);
+        break;
+    }
+    default: {
+        uint32_t resets, first;
+        audio_dsp_faults(&resets, &first);
+        snprintf(v, n, "%lu", (unsigned long)resets);
+        break;
+    }
+    }
+}
+
+static void draw_debug(void)
+{
+    static const char *const l_run[4] = {"BACK", " ", " ", "RUN"};
+    static const char *const l_back[4] = {"BACK", " ", " ", " "};
+    char v[20];
+    const char *label;
+    int top = dbg_sel >= MENU_ROWS ? dbg_sel - MENU_ROWS + 1 : 0;
+
+    lcd_clear();
+    draw_list_title("DEBUG", dbg_sel + 1, DBG_ROWS);
+    for (int r = 0; r < MENU_ROWS && top + r < DBG_ROWS; r++) {
+        int i = top + r, y = 11 + 9 * r;
+        bool on = i == dbg_sel;
+        if (on)
+            lcd_fill(0, y, 121, y + 8, true);
+        dbg_row(i, v, sizeof v, &label);
+        lcd_text_f(&font8, 4, y + 1, label, on);
+        lcd_text_f(&font8, 119 - lcd_text_width(&font8, v), y + 1, v, on);
+    }
+    draw_scrollbar(top, DBG_ROWS, MENU_ROWS);
+    draw_labels(dbg_sel <= DBG_RESTART ? l_run : l_back);
+}
+
+static void debug_run(void)
+{
+    audio_i2s_info_t in;
+    audio_i2s_info(&in);
+    if (dbg_sel == DBG_SWAP_IN)
+        audio_set_swap(!in.swap_in, in.swap_out);
+    else if (dbg_sel == DBG_SWAP_OUT)
+        audio_set_swap(in.swap_in, !in.swap_out);
+    else if (dbg_sel == DBG_RESTART)
+        audio_i2s_restart();
+}
+
+static void debug_key(int code, bool lng)
+{
+    if (code == KEY_F1)
+        state = UI_MAIN;                /* short and long: straight back */
+    else if (!lng && (code == KEY_F4 || code == KEY_TUNE_PUSH))
+        debug_run();
+}
+
 static void softkey(int k, bool lng)
 {
     if (lng) {
+        debug_armed = wp.page == 3 && k == 3;      /* VER: hold 3 s = DEBUG */
         if (wp.page == 1 && k == 3)     /* QSK long: QSK TIME */
             open_edit(&set_qsk_time);
         panel_until = 0;
@@ -2017,6 +2110,11 @@ static void draw(void)
         lcd_flush();
         return;
     }
+    if (state == UI_DEBUG) {
+        draw_debug();
+        lcd_flush();
+        return;
+    }
     if (state == UI_TXCAL) {
         draw_txcal();
         lcd_flush();
@@ -2127,6 +2225,16 @@ static void handle_key(int ev)
     int code = KEY_CODE(ev);
     bool lng = ev & KEY_LONG;
 
+    if (ev & KEY_HOLD) {                /* 3 s: only the VER soft key uses it */
+        if (state == UI_MAIN && code == KEY_F4 && debug_armed)
+            open_debug();
+        debug_armed = false;
+        dirty = true;
+        return;
+    }
+    if (lng)
+        debug_armed = false;            /* softkey() re-arms it for the VER key */
+
     if (state == UI_FM) {
         fm_key(code);
     } else if (state == UI_VER || state == UI_MSGBOX) {
@@ -2134,6 +2242,8 @@ static void handle_key(int ev)
         menu_back = false;
     } else if (state == UI_MENU) {
         menu_key(code, lng);
+    } else if (state == UI_DEBUG) {
+        debug_key(code, lng);
     } else if (state == UI_TXCAL) {
         cal_key(code, lng);
     } else if (state == UI_EDIT) {
@@ -2210,6 +2320,9 @@ static void tune(int d, uint32_t now)
         edit_spin(d, now);              /* stock applies live, restores on QUIT */
     } else if (state == UI_MENU) {
         menu_cursor(d > 0 ? 1 : -1);
+    } else if (state == UI_DEBUG) {
+        int c = dbg_sel + (d > 0 ? 1 : -1);
+        dbg_sel = c < 0 ? 0 : c >= DBG_ROWS ? DBG_ROWS - 1 : c;
     } else if (state == UI_TXCAL) {
         if (cal_confirm)
             return;

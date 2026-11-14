@@ -29,11 +29,14 @@ enum { ENC_TUNE, ENC_AUX, ENC_COUNT };
 
 /* Key events carry the stock combined code: OR of (column bit | 0x100 << row) of every key
  * pressed during the press session, e.g. BAND- + BAND+ together = 0x406.
- * SHORT is sent when all keys are released (unless LONG fired), LONG after 1 s held. */
+ * SHORT is sent when all keys are released (unless LONG fired), LONG after 1 s held, and
+ * HOLD (a separate event, without the LONG bit) after 3 s held. */
 #define KEY_SHORT         0x0000
 #define KEY_LONG          0x4000
+#define KEY_HOLD          0x2000
 #define KEY_CODE(ev)      ((ev) & 0x0FFF)
 #define LONG_PRESS_MS     1000
+#define HOLD_PRESS_MS     3000
 
 void input_init(void);
 void input_tick_1ms(void);              /* call from SysTick */

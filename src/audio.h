@@ -32,6 +32,18 @@ typedef enum {
     AUDIO_TX_NULL,      /* TX IQ CAL: no modulation, only the DC offsets (carrier leakage) */
 } audio_mode_t;
 
+/* Debug menu: exchange L/R of the codec input (RX I/Q, TX mic / data) and of the output (TX I/Q,
+ * RX audio is mono). Not stored: runtime only. */
+void audio_set_swap(bool in, bool out);
+/* Debug menu: state of the I2S2 slaves (SR registers, WS pin, DMA positions in half-words). */
+typedef struct {
+    uint32_t rx_sr, tx_sr, rx_pos, tx_pos, restarts;
+    int last;                                   /* last restart: 0 ok, -1 no WS high seen */
+    bool ws, swap_in, swap_out;
+} audio_i2s_info_t;
+void audio_i2s_info(audio_i2s_info_t *o);
+/* Re-lock both slaves on the running codec clocks (see audio.c). 0 ok, -1 no clock. */
+int audio_i2s_restart(void);
 int audio_start(void);          /* I2S + DMA armed; call before codec_init() (codec = clock master) */
 void audio_set_mode(audio_mode_t m);
 void audio_set_gain(float g);   /* digital gain for MIC/IQ modes */

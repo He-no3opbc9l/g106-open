@@ -69,7 +69,8 @@ def main():
             buf = (buf + d)[-512:]
         # checked on every pass: the menu may show up < 1 s after the last "1" and then go quiet
         low = buf.lower()
-        if b"update fw" in low and time.time() - sent_at > 1.0 and b"erasing" not in low:
+        # the menu may have scrolled away: the bootloader then only prints "Exit in N(s)" every second
+        if (b"update fw" in low or b"exit in" in low) and time.time() - sent_at > 1.0 and b"erasing" not in low:
             time.sleep(0.3)
             ser.write(b"1")
             sent_at = time.time()

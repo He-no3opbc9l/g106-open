@@ -11,7 +11,7 @@
  *   F1..F4: soft keys of the current page; the first press only opens the panel (stock);
  *           page 6 (own): FILT = RX/TX audio filter of the current mode (SSB, DATA, AM 2.0..6.0 kHz,
  *                         NFM 2.0..3.0 kHz; CW opens CWF),
- *                         AGC = receive AGC speed OFF / SOFT / MED / HARD (stock),
+ *                         ZOOM = scope zoom 1.0x..3.0x (AGC speed: SETTINGS > RX),
  *                         SQL = NFM squelch OFF / 1..30 (S-meter threshold, arrow on the meter),
  *                         SETT = SETTINGS menu (categories RX / TX / CW / DISPLAY / SYSTEM: all
  *                         own and advanced settings, see the SETTINGS menu section below)
@@ -157,7 +157,7 @@ static const char *const softkey_labels[NUM_PAGES][4] = {
     {"KS", "KM", "IMB", "CSN"},
     {"SPL", "DIS", "BP", "VER"},
     {"WFM", "BSM", "MG", "TXP"},
-    {"FILT", "AGC", "SQL", "SETT"},
+    {"FILT", "ZOOM", "SQL", "SETT"},
 };
 static const char *const mw_labels[4] = {"QUIT", " ", " ", "SAVE"};   /* stock 0x08038d04 */
 static const char *const mc_labels[4] = {"QUIT", " ", " ", "CLR"};    /* stock 0x08038d40 */
@@ -1902,7 +1902,7 @@ static void softkey(int k, bool lng)
         open_edit(fg < 0 ? &set_cw_flt : &set_filt[fg]);
         break;
     }
-    case 21: open_edit(&set_agc); break;          /* AGC (own page 6) */
+    case 21: open_edit(&set_zoom); break;         /* ZOOM (own page 6) */
     case 22: open_edit(&set_sql); break;          /* SQL (own page 6) */
     case 23: open_menu(); break;                  /* SETT: SETTINGS menu (own) */
     case 14:                            /* BP */

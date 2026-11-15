@@ -49,8 +49,8 @@ Deliberate differences from stock:
 | | |
 |---|---|
 | FILT | RX/TX audio filter, own width per mode group: SSB, DATA (L-D/U-D), AM 2.0–6.0 kHz, NFM 2.0–3.0 kHz; low cut 20 Hz (NFM 300 Hz); in CW it opens CWF (soft-key page 6) |
-| SCOPE ZOOM | spectrum zoom 1.0–3.0× (SETTINGS menu) |
-| AGC | OFF / SOFT / MED / HARD (HARD = stock, OFF = fixed gain) (page 6) |
+| SCOPE ZOOM | spectrum zoom 1.0–3.0× (page 6, ZOOM soft key; also SETTINGS menu) |
+| AGC | OFF / SOFT / MED / HARD (HARD = stock, OFF = fixed gain) (SETTINGS menu) |
 | MIC GAIN | 0..60 = 0..+30 dB in 0.5 dB steps (stock: 0..30) |
 | Mic EQ, COMP | 3-band mic equaliser and compressor (SETTINGS menu); data modes bypass them |
 | SETTINGS | menu (SETT soft key, page 6) with categories RX, TX, CW, DISPLAY, SYSTEM, CAL: all own and advanced settings; PTT works inside it for live mic/TX adjustments |

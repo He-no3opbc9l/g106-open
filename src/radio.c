@@ -1749,14 +1749,13 @@ static void menu_key(int code, bool lng)
 }
 
 
-/* ---- DEBUG menu (own): hold the VER soft key (page 4, F4) for 3 s on the main screen. Live I2S /
+/* ---- DEBUG menu (own): hold the VER soft key (page 4, F4) for 1 s on the main screen. Live I2S /
  * codec diagnostics for the "I/Q swapped after power-on" problem, plus actions: IN / OUT SWAP
  * exchange L/R of the codec input (RX I/Q, TX mic) / output (TX I/Q), RESTART re-locks the I2S
  * slaves on the running codec clocks. Nothing is stored: every power-on starts clean. Tune
  * encoder = cursor, F4 / TUNE push = run the action, F1 (or F1 long) = back. ---- */
 enum { DBG_SWAP_IN, DBG_SWAP_OUT, DBG_RESTART, DBG_WS, DBG_SR, DBG_POS, DBG_LOAD, DBG_RESETS, DBG_ROWS };
 static int dbg_sel;
-static bool debug_armed;                /* the VER soft key got its long event: a 3 s hold opens DEBUG */
 
 static void open_debug(void)
 {
@@ -1767,7 +1766,7 @@ static void open_debug(void)
 
 static void dbg_row(int i, char *v, size_t n, const char **label)
 {
-    static const char *const labels[DBG_ROWS] = {"IN SWAP", "OUT SWAP", "I2S RESTART", "WS / CHSIDE",
+    static const char *const labels[DBG_ROWS] = {"IN SWAP", "OUT SWAP", "I2S RESTART", "WS/CHSIDE",
                                                  "SR RX/TX", "POS RX/TX", "DSP LOAD", "DSP RESETS"};
     audio_i2s_info_t in;
     audio_i2s_info(&in);
@@ -1779,7 +1778,8 @@ static void dbg_row(int i, char *v, size_t n, const char **label)
         snprintf(v, n, "%lu %s", (unsigned long)in.restarts,
                  !in.restarts ? "-" : in.last ? "NO WS" : "OK");
         break;
-    case DBG_WS: snprintf(v, n, "%d / %lu", in.ws, (unsigned long)(in.rx_sr >> 2 & 1)); break;
+    case DBG_WS: snprintf(v, n, "%d / %lu %lu", in.ws, (unsigned long)(in.rx_sr >> 2 & 1),
+                                      (unsigned long)(in.tx_sr >> 2 & 1)); break;
     case DBG_SR: snprintf(v, n, "%03lX/%03lX", (unsigned long)in.rx_sr, (unsigned long)in.tx_sr); break;
     case DBG_POS: snprintf(v, n, "%lu/%lu", (unsigned long)in.rx_pos, (unsigned long)in.tx_pos); break;
     case DBG_LOAD: {
@@ -1843,7 +1843,10 @@ static void debug_key(int code, bool lng)
 static void softkey(int k, bool lng)
 {
     if (lng) {
-        debug_armed = wp.page == 3 && k == 3;      /* VER: hold 3 s = DEBUG */
+        if (wp.page == 3 && k == 3 && state == UI_MAIN) {   /* VER: hold 1 s = DEBUG */
+            open_debug();
+            return;
+        }
         if (wp.page == 1 && k == 3)     /* QSK long: QSK TIME */
             open_edit(&set_qsk_time);
         panel_until = 0;
@@ -2202,16 +2205,6 @@ static void handle_key(int ev)
 {
     int code = KEY_CODE(ev);
     bool lng = ev & KEY_LONG;
-
-    if (ev & KEY_HOLD) {                /* 3 s: only the VER soft key uses it */
-        if (state == UI_MAIN && code == KEY_F4 && debug_armed)
-            open_debug();
-        debug_armed = false;
-        dirty = true;
-        return;
-    }
-    if (lng)
-        debug_armed = false;            /* softkey() re-arms it for the VER key */
 
     if (state == UI_FM) {
         fm_key(code);

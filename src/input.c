@@ -134,7 +134,7 @@ static uint16_t stock_code(uint16_t bitmap)
 
 static uint16_t session_code;
 static uint32_t held_ms;
-static bool long_sent, hold_sent;
+static bool long_sent;
 
 static void key_session_tick(void)
 {
@@ -144,21 +144,17 @@ static void key_session_tick(void)
             session_code |= code;
             held_ms = 0;
         }
-        if (held_ms < HOLD_PRESS_MS)
+        if (held_ms < LONG_PRESS_MS)
             held_ms++;
         if (!long_sent && held_ms >= LONG_PRESS_MS) {
             push_event(session_code | KEY_LONG);
             long_sent = true;
         }
-        if (!hold_sent && held_ms >= HOLD_PRESS_MS) {
-            push_event(session_code | KEY_HOLD);
-            hold_sent = true;
-        }
     } else if (session_code) {
         if (!long_sent)
             push_event(session_code | KEY_SHORT);
         session_code = 0;
-        long_sent = hold_sent = false;
+        long_sent = false;
         held_ms = 0;
     }
 }

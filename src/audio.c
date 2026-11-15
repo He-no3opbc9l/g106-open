@@ -742,7 +742,14 @@ void audio_i2s_info(audio_i2s_info_t *o)
 
 /* Re-synchronise both I2S slaves on the running codec clocks. RM0090: a Philips slave has to be
  * enabled while WS is high, then it locks onto the next falling edge (= left channel first).
- * Both are enabled back to back with interrupts off so that they see the same frame. */
+ * Two things made the old version fail at random:
+ *  - the peripherals kept their state: an unread RXNE half-word (or OVR) in SPI2 DR went into
+ *    rx_buf[0] as soon as the DMA request was enabled, shifting the whole stream by 16 bits;
+ *    the same for a stale half-word in the ext TX data register. SPI2RST (resets SPI2 and
+ *    I2S2ext) clears all of it.
+ *  - "WS is high" was polled at an arbitrary point of the high phase, possibly just before the
+ *    falling edge, so the two slaves could catch different frames. Now the enable follows a
+ *    rising edge of WS (low -> high), ~30 BCLK before the next falling edge. */
 int audio_i2s_restart(void)
 {
     volatile uint32_t *i2s = (volatile uint32_t *)I2S2_BASE;
@@ -751,8 +758,14 @@ int audio_i2s_restart(void)
     REG32(0xE000E180) = 1u << 14;               /* NVIC ICER: DSP interrupt off */
     i2s[7] &= ~(1u << 10);                      /* I2SE off */
     ext[7] &= ~(1u << 10);
-    i2s[1] = 0;
-    ext[1] = 0;
+    DMA_S(RX_STREAM, 0x00) = 0;
+    DMA_S(TX_STREAM, 0x00) = 0;
+    while ((DMA_S(RX_STREAM, 0x00) | DMA_S(TX_STREAM, 0x00)) & 1)
+        ;
+    RCC->APB1RSTR |= 1u << 14;                  /* SPI2RST: SPI2 + I2S2ext back to reset state */
+    __dsb();
+    RCC->APB1RSTR &= ~(1u << 14);
+    __dsb();
     for (unsigned k = 0; k < 2 * HALF_WORDS; k++)
         tx_buf[k] = 0;
     dma_setup(RX_STREAM, 0, 0, &i2s[3], rx_buf);
@@ -760,6 +773,8 @@ int audio_i2s_restart(void)
     DMA_LIFCR = 0x0F7D0F7D;
     DMA_HIFCR = 0x0F7D0F7D;
     DMA_S(RX_STREAM, 0x00) |= (1u << 4) | (1u << 3);
+    i2s[7] = (1u << 11) | (1u << 8) | (2u << 1) | 1u;
+    ext[7] = (1u << 11) | (0u << 8) | (2u << 1) | 1u;
     i2s[1] = 1u << 0;
     ext[1] = 1u << 1;
     DMA_S(TX_STREAM, 0x00) |= 1;
@@ -767,13 +782,17 @@ int audio_i2s_restart(void)
 
     int res = -1;
     __disable_irq();
-    for (uint32_t n = 0; n < 40000; n++) {      /* ~1 ms; WS period is 20.8 us */
+    uint32_t n = 0;
+    while (n < 40000 && (GPIOB->IDR & (1u << 12)))      /* wait for WS low ... */
+        n++;
+    while (n < 80000) {                                 /* ... then its rising edge (~1 ms max) */
         if (GPIOB->IDR & (1u << 12)) {
             ext[7] |= 1u << 10;
             i2s[7] |= 1u << 10;
             res = 0;
             break;
         }
+        n++;
     }
     __enable_irq();
     REG32(0xE000E280) = 1u << 14;               /* NVIC ICPR: drop a stale pending request */

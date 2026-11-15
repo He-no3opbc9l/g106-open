@@ -158,7 +158,7 @@ typedef struct {
     uint8_t nfm_sql;            /* v4: NFM squelch 0..30 (S-meter threshold, 2 dB steps) */
     uint8_t contrast;           /* v6: LCD contrast 0..20, 10 = stock (v1..v5: pad, 0) */
     uint8_t filt[3];            /* v5: FILT DATA / AM / NFM */
-    uint8_t am_mod;             /* v8: AM modulation depth 0..100 % (v1..v7: pad, 0) */
+    uint8_t am_drive;             /* v8: AM TX carrier level 1..20 (was the AM depth 0..100 %; v1..v7: pad) */
     int16_t freq_cal;           /* v7: reference crystal error, 0.01 ppm */
     uint16_t low_cut;           /* v9: LOW CUT 10..400 Hz (v1..v8: pad, 0) */
     uint32_t crc;               /* v1: word 2, v2: word 3, v3/v4: word 4, v5/v6: word 5, v7: word 6 */
@@ -172,7 +172,7 @@ uint8_t mic_gain = 20;
 uint8_t agc_mode = AGC_HARD;
 uint8_t nfm_sql = 9;
 uint8_t lcd_contrast_lvl = CONTRAST_STOCK;
-uint8_t am_mod = AM_MOD_DEFAULT;
+uint8_t am_drive = AM_DRIVE_DEFAULT;
 int16_t freq_cal;
 int16_t low_cut_hz = 20;
 
@@ -180,7 +180,7 @@ int settings_save_own(void)
 {
     own_block_t own = {OWN_MAGIC9, preamp, filt_hi[FILT_SSB], (uint8_t)wp.page, scope_zoom,
                        {mic_eq[0], mic_eq[1], mic_eq[2]}, comp_level, mic_gain, agc_mode,
-                       nfm_sql, lcd_contrast_lvl, {filt_hi[FILT_DATA], filt_hi[FILT_AM], filt_hi[FILT_NFM]}, am_mod,
+                       nfm_sql, lcd_contrast_lvl, {filt_hi[FILT_DATA], filt_hi[FILT_AM], filt_hi[FILT_NFM]}, am_drive,
                        freq_cal, (uint16_t)low_cut_hz, 0};
     own.crc = crc_words(&own, 6);
     return ee_write(EE_OWN, &own, sizeof own);
@@ -356,7 +356,7 @@ int settings_load(void)
         if (v9)
             low_cut_hz = own.low_cut >= LOW_CUT_MIN && own.low_cut <= LOW_CUT_MAX ? own.low_cut : 20;
         if (v8)
-            am_mod = own.am_mod <= 100 ? own.am_mod : AM_MOD_DEFAULT;
+            am_drive = own.am_drive >= 1 && own.am_drive <= AM_DRIVE_MAX ? own.am_drive : AM_DRIVE_DEFAULT;
     }
     if (own_ok) {
         preamp = own.preamp & 1;

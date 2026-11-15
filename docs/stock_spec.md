@@ -233,7 +233,10 @@ Stock AM TX (DMA ISR, mode 7, 48 kHz, no decimation): mic sample -> 4-biquad ban
 modulation = 1.8 x the raw mic sample (100 % at mic 0.28 FS), carrier 0.0248 FS x power.
 Stock AM uses the same power factors as CW (0.2 / 0.4 / 1.0). The open firmware ports the chain 1:1
 (`am_tx` in audio.c, coefficients copied from the stock tables, LPF DC gain 2 -> carrier 0.0247 FS
-as in the stock snapshot): no leveller, EQ, compressor, AM MOD / drive deviations any more.
+as in the stock snapshot). Replaced later (2026-11-15, see Deviation below) by the own AM.
+Deviation (user: the stock AM sounds hoarse, same on stock firmware): HackRF captures of the carrier on 7055 kHz
+showed that the TX chain saturates above a baseband carrier of ~0.002..0.005 FS: a 38 % tone gave 4 % depth at the stock
+carrier (0.0248 FS at HIGH), 39 % at 0.0025 FS (THD 2.5 %); a whistle gave 2nd harmonic -11 dB. (Part of that may be HackRF input overload; the stock CW levels 7 / 12.7 / 15.2 V for 0.009 / 0.018 / 0.045 FS say the PA is linear up to ~0.015 FS.) A 100 Hz envelope ripple of ~9 % is present on the carrier at every drive (supply hum). The open firmware no longer uses the stock AM filter chain: AM goes through the SSB speech processing (FILT AM band-pass, LOW CUT, mic EQ, compressor, peak limiter, in `tx16`), then the envelope (1 + 0.94 m) x carrier is built at 48 kHz (I = Q); the carrier is set by AM DRIVE (own block, the former AM MOD byte, 1..20 x 0.0005 FS at HIGH, default 6; power LOW / MID = x0.4 / x0.63). User: the AM with the stock chain and AM DRIVE 6 was already much better than stock.
 Shift registers (filters) need slow bit-banging (~1 µs per phase).
 
 ## CAT (CI-V)

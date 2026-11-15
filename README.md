@@ -53,7 +53,7 @@ Deliberate differences from stock:
 | SCOPE ZOOM | spectrum zoom 1.0–3.0× (page 6, ZOOM soft key; also SETTINGS menu) |
 | AGC | OFF / SOFT / MED / HARD (HARD = stock, OFF = fixed gain) (SETTINGS menu) |
 | MIC GAIN | 0..60 = 0..+30 dB in 0.5 dB steps (stock: 0..30) |
-| Mic EQ, COMP | 3-band mic equaliser and compressor (SETTINGS menu); data modes bypass them |
+| Mic EQ, COMP | 3-band mic equaliser and compressor (SETTINGS menu) for SSB, AM and NFM; data modes bypass them |
 | SETTINGS | menu (SETT soft key, page 6) with categories RX, TX, CW, DISPLAY, SYSTEM, CAL: all own and advanced settings; PTT works inside it for live mic/TX adjustments |
 | VER | own screen: firmware version, build date, uptime, DSP load, EEPROM / I2C state |
 | CONTRAST | LCD contrast (SETTINGS menu) |
@@ -61,7 +61,7 @@ Deliberate differences from stock:
 | FREQ CAL | reference crystal correction ±50 ppm in 0.01 ppm steps (SETTINGS > CAL; stock has none) |
 | Preamp | global, not per VFO/band |
 | TX switching | 10 ms relay delay + 10 ms ramps, no band limits |
-| AM TX | as stock |
+| AM TX | own: the same voice processing as SSB (FILT AM, LOW CUT, mic EQ, COMP, limiter), modulation ≤ ~94 %, own carrier level (SETTINGS > TX > AM DRIVE 1..20, default 6): the stock AM (carrier ≈ 50 on this scale) saturates the PA and sounds hoarse; power LOW / MID / HIGH = −8 / −4 / 0 dB |
 | NFM TX | speech compressor always on (≥ +20 dB) + limiter (±2.5 kHz) |
 | NFM | enabled in the MODE cycle (stock lists it but disables it): ±2.5 kHz deviation, 6 dB/oct pre-/de-emphasis; SQL = squelch OFF / 1..30 by the S-meter level (2 dB per step), its threshold is shown as an arrow over the S-meter (page 6) |
 

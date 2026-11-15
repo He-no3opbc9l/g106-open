@@ -98,6 +98,8 @@ void audio_set_agc(int speed);
 void audio_set_rx_filter(float lo_hz, float hi_hz);
 /* Own LOW CUT: common high-pass 10..400 Hz (4th order) for RX and TX in all modes. */
 void audio_set_low_cut(float hz);
+/* Own: AM TX carrier level 1..20 (baseband carrier = level x 0.0005 FS at HIGH power). */
+void audio_set_am_drive(int level);
 /* Own: NFM squelch gate (the decision is made in radio.c from the S-meter level). */
 void audio_set_nfm_gate(bool open);
 /* CW band-pass: centre (tone) and bandwidth in Hz. */

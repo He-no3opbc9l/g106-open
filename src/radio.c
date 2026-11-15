@@ -123,6 +123,9 @@ static const setting_t set_eq_low = {0, 24, "MIC LOW:", "%e", NULL, &mic_eq[0], 
 static const setting_t set_eq_mid = {0, 24, "MIC MID:", "%e", NULL, &mic_eq[1], 1, ST_OWN};
 static const setting_t set_eq_high = {0, 24, "MIC HIGH:", "%e", NULL, &mic_eq[2], 1, ST_OWN};
 static const char *const comp_names[] = {"OFF", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10"};
+/* Own: AM TX carrier level (HIGH power). The PA saturates quickly: the stock level (= 50 on this
+ * scale) flattens the modulation and the sound is hoarse. */
+static const setting_t set_am_drive = {1, AM_DRIVE_MAX, "AM DRIVE:", "%d", NULL, &am_drive, 1, ST_OWN};
 static const setting_t set_comp = {0, 10, "COMP:", NULL, comp_names, &comp_level, 1, ST_OWN};
 /* Own: receive AGC speed (HARD = stock). */
 static const char *const agc_names[] = {"OFF ", "SOFT", "MED ", "HARD"};
@@ -672,6 +675,7 @@ void radio_init(void)
     }
     audio_set_mic_eq(mic_eq[0] - 12, mic_eq[1] - 12, mic_eq[2] - 12);
     audio_set_comp(comp_level);
+    audio_set_am_drive(am_drive);
     audio_set_agc(agc_mode);
     keyer_init();
     apply_keyer();
@@ -1019,6 +1023,8 @@ static void setting_set(const setting_t *s, int v)
         audio_set_mic_eq(mic_eq[0] - 12, mic_eq[1] - 12, mic_eq[2] - 12);
     if (s == &set_comp)
         audio_set_comp(comp_level);
+    if (s == &set_am_drive)
+        audio_set_am_drive(am_drive);
     if (s == &set_mic_gain)
         param2.mic_gain = mic_gain > 30 ? 30 : mic_gain;   /* stock block: stock range only */
     if (s == &set_agc)
@@ -1464,7 +1470,7 @@ static const mitem_t mi_rx[] = {
 };
 static const mitem_t mi_tx[] = {
     {"TX POWER", MI_SET, &set_tx_power}, {"MIC GAIN", MI_SET, &set_mic_gain},
-    {"COMPRESSOR", MI_SET, &set_comp}, {"EQ 300Hz", MI_SET, &set_eq_low},
+    {"AM DRIVE", MI_SET, &set_am_drive}, {"COMPRESSOR", MI_SET, &set_comp}, {"EQ 300Hz", MI_SET, &set_eq_low},
     {"EQ 1200Hz", MI_SET, &set_eq_mid}, {"EQ 2500Hz", MI_SET, &set_eq_high},
 };
 static const mitem_t mi_cw[] = {

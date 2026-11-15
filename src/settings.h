@@ -115,8 +115,9 @@ extern int16_t freq_cal;
 #define LOW_CUT_MIN 10
 #define LOW_CUT_MAX 400
 extern int16_t low_cut_hz;
-#define AM_MOD_DEFAULT 90
-extern uint8_t am_mod;                  /* reserved: formerly AM TX modulation depth, unused (own block v8 byte kept) */
+#define AM_DRIVE_DEFAULT 6
+#define AM_DRIVE_MAX     20
+extern uint8_t am_drive;                /* own: AM TX carrier level 1..20 (own block v8 byte; old values > 20 = default) */
 
 /* Returns 0 if the stock work params were valid (CRC ok), <0 if defaults were used. */
 int settings_load(void);

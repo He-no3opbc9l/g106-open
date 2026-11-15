@@ -994,50 +994,19 @@ void audio_set_mic_eq(int low_db, int mid_db, int high_db)
     __enable_irq();
 }
 
-/* AM TX exactly as stock (DMA ISR mode 7, 48 kHz, no decimation, no EQ / compressor / limiter):
- * mic sample -> 4-biquad band-pass (stock 0x0803873c, ~50 Hz..5 kHz) -> x 0.47596 + 0.5 ->
- * 5-biquad low-pass (stock 0x08038914, DC gain 2, cut ~4.5 kHz) -> x 0.05 x 0.49512 -> I = Q.
- * Carrier = 0.5 x 2 x 0.05 x 0.495 = 0.0248 FS, modulation 100 % at a mic level of ~0.28 FS.
- * Coefficients {b0, b1, b2, a1, a2} are the stock tables (y = b x - a y). */
-static const eq_t am_bp_init[4] = {
-    {0.0581458807f, 0.075787425f, 0.0581458807f, -1.6387409f, 0.701693177f, 0, 0, 0, 0},
-    {0.224657804f, -0.0895784199f, 0.224657804f, -1.53294802f, 0.796757579f, 0, 0, 0, 0},
-    {0.473815411f, -0.452147782f, 0.473815411f, -1.43196023f, 0.898504972f, 0, 0, 0, 0},
-    {0.275304973f, -0.306612015f, 0.275304973f, -1.39473152f, 0.970513403f, 0, 0, 0, 0},
-};
-static const eq_t am_lp_init[5] = {
-    {0.0411019363f, 0.0392021537f, 0.0411019363f, -1.60375309f, 0.656334162f, 0, 0, 0, 0},
-    {0.170178384f, -0.152693257f, 0.170178384f, -1.60720348f, 0.744783401f, 0, 0, 0, 0},
-    {0.413963974f, -0.564383209f, 0.413963974f, -1.6130234f, 0.850328505f, 0, 0, 0, 0},
-    {0.634703755f, -0.955306709f, 0.634703755f, -1.62207484f, 0.928148091f, 0, 0, 0, 0},
-    {0.421069413f, -0.652917027f, 0.421069413f, -1.63893509f, 0.979118049f, 0, 0, 0, 0},
-};
-#define AM_MOD_GAIN   0.47596255f                   /* stock DAT_1000003c for AM */
-#define AM_OUT_GAIN   (0.05f * 0.49512404f)         /* stock x 0.05 x DAT_10000038 */
-static eq_t am_bp[4], am_lp[5];
-static bool am_init_done;
+/* AM TX (own): the same speech processing as SSB (DC block, 16 kHz band-pass FILT AM + LOW CUT,
+ * +12 dB, mic EQ, compressor, peak limiter |m| <= 1 in tx16), then the envelope
+ * (1 + 0.94 m) x carrier at 48 kHz, I = Q. The stock AM chain (4-biquad band-pass, 5-biquad
+ * low-pass, no limiter) at its stock carrier saturated the PA and sounded hoarse; the carrier is
+ * set by AM DRIVE (x 0.0005 FS at HIGH, LOW / MID = -8 / -4 dB). */
+#define AM_DEPTH      0.94f
+static volatile float am_scale = 6 * 0.0005f;
 
-static void am_reset(void)
+void audio_set_am_drive(int level)
 {
-    memcpy(am_bp, am_bp_init, sizeof am_bp);
-    memcpy(am_lp, am_lp_init, sizeof am_lp);
-    am_init_done = true;
+    am_scale = (level < 1 ? 1 : level > 20 ? 20 : level) * 0.0005f;
 }
 
-static float am_tx(float x)
-{
-    if (!am_init_done)
-        am_reset();
-    for (int k = 0; k < 4; k++)
-        x = eq_run(&am_bp[k], x);
-    x = x * AM_MOD_GAIN + 0.5f;
-    for (int k = 0; k < 5; k++)
-        x = eq_run(&am_lp[k], x);
-    float v = x * AM_OUT_GAIN;
-    if (fabsf(x) > tx_peak)
-        tx_peak = fabsf(x);                 /* diag: envelope (1 = 100 % modulation at 2.0) */
-    return v;
-}
 
 static void tx16(audio_mode_t m, float x, float *oi, float *oq)
 {
@@ -1069,6 +1038,10 @@ static void tx16(audio_mode_t m, float x, float *oi, float *oq)
     alc_gain = alc_env > 1.0f ? 1.0f / alc_env : 1.0f;
     y *= alc_gain;
 
+    if (m == AUDIO_TX_AM) {                     /* modulating signal |m| <= 1, envelope built at 48 kHz */
+        *oi = *oq = y;
+        return;
+    }
     if (m == AUDIO_TX_NFM) {                    /* |y| <= 1 -> +/-2.5 kHz; full carrier */
         fm_phase += y * (NFM_DEV / FS2);
         fm_phase -= floorf(fm_phase);
@@ -1098,15 +1071,6 @@ static void tx16(audio_mode_t m, float x, float *oi, float *oq)
 static void tx48(audio_mode_t m, float l, float r, float *oi, float *oq)
 {
     float x = tx_data_src ? r : l;
-    if (m == AUDIO_TX_AM) {                         /* stock chain at 48 kHz, I = Q */
-        float v = am_tx(x);
-        spec_push(v, v);
-        tx_ramp += tx_ramp_up ? 1.0f / 480 : -1.0f / 480;
-        tx_ramp = tx_ramp < 0 ? 0 : tx_ramp > 1 ? 1 : tx_ramp;
-        float a = tx_ramp * tx_power;
-        tx_out(v * a, v * a, oi, oq);
-        return;
-    }
     tx_dc = x - tx_prev + 0.9975f * tx_dc;          /* ~19 Hz */
     tx_prev = x;
     tdbuf[tdpos] = tdbuf[tdpos + NDEC] = tx_dc;
@@ -1121,6 +1085,17 @@ static void tx48(audio_mode_t m, float l, float r, float *oi, float *oq)
     }
     float i = dot(h_int[tdphase], &tybuf_i[typos], NPH);
     float q = dot(h_int[tdphase], &tybuf_q[typos], NPH);
+    if (m == AUDIO_TX_AM) {
+        float mod = i * AM_DEPTH;
+        mod = mod > 0.98f ? 0.98f : mod < -0.98f ? -0.98f : mod;    /* interpolation overshoot */
+        float v = (1.0f + mod) * am_scale;
+        spec_push(v, v);
+        tx_ramp += tx_ramp_up ? 1.0f / 480 : -1.0f / 480;
+        tx_ramp = tx_ramp < 0 ? 0 : tx_ramp > 1 ? 1 : tx_ramp;
+        float a = tx_ramp * (tx_power > 0.9f ? 1.0f : tx_power > 0.3f ? 0.63f : 0.4f);
+        tx_out(v * a, v * a, oi, oq);
+        return;
+    }
     spec_push(i * 0.0636396f, q * 0.0636396f);      /* TX spectrum (stock shows it too) */
 
     tx_ramp += tx_ramp_up ? 1.0f / 480 : -1.0f / 480;
@@ -1175,7 +1150,6 @@ static void dsp_state_reset(void)
     agc_env = 1e-4f;
     agc_g = 1.0f;
     tx_dc = tx_prev = alc_env = comp_env = 0;
-    am_init_done = false;
     alc_gain = comp_g = 1.0f;
 }
 

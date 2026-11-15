@@ -37,6 +37,8 @@ Working on the radio:
   AUTO-L / AUTO-R, IMB mode A / B, CWR dash ratio), sidetone at the CWT pitch, 10 ms keying
   ramps, QSK hang time (short press of the QSK soft key switches key-controlled TX on / off, as
   stock: with QSK off the key only works while PTT is held). Not tested with a real key yet.
+  Unlike stock, holding PTT (or CAT PTT) in CW / CWR also sends a steady carrier on the dial
+  frequency with the sidetone - handy for tests and calibration.
 - Split (SPL, page 4): RX on the current VFO, TX on the other one (frequency only), SPL icon, the
   TX VFO is shown on the main line while transmitting; CAT 0F. No TX in split + memory mode, as stock.
 - WFM broadcast receiver (built-in FM chip): seek and channels.

@@ -327,7 +327,8 @@ A generic keyer state machine (struct at 0x20002008) is ticked from the TIM2 1 m
   CWT frequency, 0x08027504) starts / stops.
 - DSP (modes 4 / 5, 48 kHz): envelope e += / -= 1/960 per sample (0 .. 0.5, 10 ms ramps), I = Q =
   e x 0.09 x power factor (+ DC offsets); LO = f in TX (CW -tone / CWR +tone only in RX).
-- PTT in CW mode: T/R relays only (no carrier without the key).
+- PTT in CW mode: T/R relays only (no carrier without the key). Own deviation: with PTT / CAT PTT held
+  the keyer ramp is forced up (`keyer_set_carrier`): steady carrier at the dial frequency, with the sidetone.
 - Split (SPL, page 4 F1, 0x08032c94): toggles work flags bit2 (icon "SPL" at (86,1); CAT 0F sets it).
   radio_trx_task (0x0802a136): with split and in memory mode TX is refused (error beep 523 Hz 100 ms,
   0x08038a08), also when the other VFO is outside the TX band table. While TX is active the LO / band

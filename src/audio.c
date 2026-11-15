@@ -216,6 +216,7 @@ static void dsp_init(void)
         float w = 2 * PI_F * 1000.0f / FS2, re = 1 - emph_p * cosf(w), im = emph_p * sinf(w);
         emph_norm = sqrtf(re * re + im * im) / (1 - emph_p);
     }
+    audio_set_low_cut(20);
     design_lpf(h_dec, NDEC, 8000.0f / AUDIO_FS);
     /* y48[3n+p] = 3 * sum_k h[p + 3k] * y16[n - k]; window is oldest..newest. */
     for (int p = 0; p < DEC; p++)
@@ -263,6 +264,45 @@ void audio_set_cw_filter(float tone_hz, float bw)
     float alpha = sinf(w0) / (2 * q), a0 = 1 + alpha;
     for (int i = 0; i < 2; i++)
         cw_bq[i] = (bq_t){alpha / a0, -alpha / a0, -2 * cosf(w0) / a0, (1 - alpha) / a0, 0, 0, 0, 0};
+}
+
+/* Own LOW CUT: common high-pass for all modes, 10..400 Hz, 4th-order Butterworth (two RBJ biquads,
+ * Q 0.5412 / 1.3066) at 16 kHz. One filter in the RX chain (before the AGC), one in TX (SSB / NFM /
+ * data, ahead of EQ and compressor); AM TX uses it too (envelope built after it). */
+typedef struct { float b0, b1, b2, a1, a2, x1, x2, y1, y2; } hp_t;
+static hp_t hp_rx[2], hp_tx[2];
+
+void audio_set_low_cut(float hz)
+{
+    static const float qs[2] = {0.54119610f, 1.30656296f};
+    hz = hz < 5 ? 5 : hz > 1000 ? 1000 : hz;
+    float w0 = 2 * PI_F * hz / FS2, cw = cosf(w0), sw = sinf(w0);
+    hp_t n[2];
+    for (int k = 0; k < 2; k++) {
+        float alpha = sw / (2 * qs[k]), a0 = 1 + alpha;
+        n[k] = (hp_t){(1 + cw) / 2 / a0, -(1 + cw) / a0, (1 + cw) / 2 / a0, -2 * cw / a0,
+                      (1 - alpha) / a0, 0, 0, 0, 0};
+    }
+    __disable_irq();                    /* coefficients only, the filter state keeps running */
+    for (int k = 0; k < 2; k++) {
+        hp_t *d[2] = {&hp_rx[k], &hp_tx[k]};
+        for (int j = 0; j < 2; j++) {
+            d[j]->b0 = n[k].b0; d[j]->b1 = n[k].b1; d[j]->b2 = n[k].b2;
+            d[j]->a1 = n[k].a1; d[j]->a2 = n[k].a2;
+        }
+    }
+    __enable_irq();
+}
+
+static float hp_run(hp_t *f, float x)
+{
+    for (int k = 0; k < 2; k++, f++) {
+        float y = f->b0 * x + f->b1 * f->x1 + f->b2 * f->x2 - f->a1 * f->y1 - f->a2 * f->y2;
+        f->x2 = f->x1; f->x1 = x;
+        f->y2 = f->y1; f->y1 = y;
+        x = y;
+    }
+    return x;
 }
 
 static float bq_run(bq_t *f, float x)
@@ -583,7 +623,7 @@ static float nfm_demod(float i, float q)
 
     float x = d * (FS2 / (2 * PI_F * NFM_DEV));    /* 1.0 = full deviation */
     fm_de += (x - fm_de) * (1.0f - emph_p);         /* de-emphasis (one pole at 300 Hz) */
-    return bpf_run(fm_de * emph_norm) * nfm_gain * NFM_RX_OUT;
+    return hp_run(hp_rx, bpf_run(fm_de * emph_norm)) * nfm_gain * NFM_RX_OUT;
 }
 
 /* One 16 kHz I/Q sample -> one 16 kHz audio sample. */
@@ -592,12 +632,12 @@ static float demod12(audio_mode_t m, float i, float q)
     switch (m) {
     case AUDIO_USB:
     case AUDIO_LSB:
-        return agc(bpf_run(ssb_demod(i, q, m == AUDIO_LSB)));
+        return agc(hp_run(hp_rx, bpf_run(ssb_demod(i, q, m == AUDIO_LSB))));
     case AUDIO_CW:
     case AUDIO_CWR:
-        return agc(bq_run(&cw_bq[1], bq_run(&cw_bq[0], ssb_demod(i, q, m == AUDIO_CWR))));
+        return agc(hp_run(hp_rx, bq_run(&cw_bq[1], bq_run(&cw_bq[0], ssb_demod(i, q, m == AUDIO_CWR)))));
     case AUDIO_AM:
-        return agc(bpf_run(am_demod(i, q)));
+        return agc(hp_run(hp_rx, bpf_run(am_demod(i, q))));
     case AUDIO_NFM:
         return nfm_demod(i, q);
     default:
@@ -1004,7 +1044,7 @@ static void tx16(audio_mode_t m, float x, float *oi, float *oq)
     /* band-pass, then a fast-attack / slow-release peak limiter to |x| <= 1 */
     tabuf[tapos] = tabuf[tapos + BPF_N] = x;
     tapos = tapos == BPF_N - 1 ? 0 : tapos + 1;
-    float y = dot_sym(bpf, &tabuf[tapos], BPF_N) * 4.0f;   /* +12 dB make-up */
+    float y = hp_run(hp_tx, dot_sym(bpf, &tabuf[tapos], BPF_N)) * 4.0f;   /* +12 dB make-up */
     if (!tx_data_src && !eq_flat)
         y = eq_run(&eq[2], eq_run(&eq[1], eq_run(&eq[0], y)));
     if (!tx_data_src) {

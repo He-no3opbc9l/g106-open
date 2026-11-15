@@ -114,6 +114,8 @@ static const setting_t set_filt[FILT_COUNT] = {
     {20, 60, "FILT AM:", "%k", NULL, &filt_hi[FILT_AM], 1, ST_OWN},
     {20, 30, "FILT NFM:", "%k", NULL, &filt_hi[FILT_NFM], 1, ST_OWN},
 };
+/* Own: common low cut (high-pass) for all modes, RX and TX. */
+static const setting_t set_low_cut = {LOW_CUT_MIN, LOW_CUT_MAX, "LOW CUT:", "%d Hz", NULL, &low_cut_hz, 2, ST_OWN};
 /* Own: scope zoom around the centre, 1.0x..3.0x in 0.1x steps. */
 static const setting_t set_zoom = {10, 30, "SCOPE ZOOM:", "%z", NULL, &scope_zoom, 1, ST_OWN};
 /* Own: mic equaliser bands, -12..+12 dB (stored +12). */
@@ -285,6 +287,7 @@ static void apply_filters(void)
     static const float cw_bw[3] = {50, 250, 500};
     audio_set_cw_filter(stock_settings.cw_tone, cw_bw[stock_settings.cw_filter]);
     /* Own FILT per mode group (RX and TX share the taps); NFM from 300 Hz: no CTCSS hum. */
+    audio_set_low_cut(low_cut_hz);
     int fg = filt_group(cur()->mode);
     audio_set_rx_filter(fg == FILT_NFM ? 300 : 20, (fg < 0 ? filt_hi[FILT_SSB] : filt_hi[fg]) * 100.0f);
 }
@@ -996,7 +999,7 @@ static void setting_set(const setting_t *s, int v)
         *(int16_t *)s->var = v;
     /* DSP filters follow the filter settings; in TX (SETTINGS menu) only the taps change,
      * the RX routing comes back with radio_tx_stop(). */
-    if (s == &set_cw_tone || s == &set_cw_flt || (s >= set_filt && s < set_filt + FILT_COUNT)) {
+    if (s == &set_cw_tone || s == &set_cw_flt || s == &set_low_cut || (s >= set_filt && s < set_filt + FILT_COUNT)) {
         if (txing)
             apply_filters();
         else
@@ -1457,7 +1460,7 @@ typedef struct {
 static const mitem_t mi_rx[] = {
     {"SSB FILTER", MI_SET, &set_filt[FILT_SSB]}, {"DATA FILTER", MI_SET, &set_filt[FILT_DATA]},
     {"AM FILTER", MI_SET, &set_filt[FILT_AM]}, {"NFM FILTER", MI_SET, &set_filt[FILT_NFM]},
-    {"AGC", MI_SET, &set_agc}, {"PREAMP", MI_PREAMP, NULL}, {"NFM SQUELCH", MI_SET, &set_sql},
+    {"LOW CUT", MI_SET, &set_low_cut}, {"AGC", MI_SET, &set_agc}, {"PREAMP", MI_PREAMP, NULL}, {"NFM SQUELCH", MI_SET, &set_sql},
 };
 static const mitem_t mi_tx[] = {
     {"TX POWER", MI_SET, &set_tx_power}, {"MIC GAIN", MI_SET, &set_mic_gain},

@@ -144,6 +144,7 @@ int settings_save_param2(void)
 #define OWN_MAGIC6  0x36504F47u     /* "GOP6": v6, CRC over 5 words (+ LCD contrast) */
 #define OWN_MAGIC7  0x37504F47u     /* "GOP7": v7, CRC over 6 words (+ FREQ CAL) */
 #define OWN_MAGIC8  0x38504F47u     /* "GOP8": v8, CRC over 6 words (+ AM MOD in the former pad2) */
+#define OWN_MAGIC9  0x39504F47u     /* "GOP9": v9, CRC over 6 words (+ LOW CUT in the former pad3) */
 typedef struct {
     uint32_t magic;
     uint8_t preamp;
@@ -159,7 +160,7 @@ typedef struct {
     uint8_t filt[3];            /* v5: FILT DATA / AM / NFM */
     uint8_t am_mod;             /* v8: AM modulation depth 0..100 % (v1..v7: pad, 0) */
     int16_t freq_cal;           /* v7: reference crystal error, 0.01 ppm */
-    uint8_t pad3[2];
+    uint16_t low_cut;           /* v9: LOW CUT 10..400 Hz (v1..v8: pad, 0) */
     uint32_t crc;               /* v1: word 2, v2: word 3, v3/v4: word 4, v5/v6: word 5, v7: word 6 */
 } own_block_t;
 
@@ -173,13 +174,14 @@ uint8_t nfm_sql = 9;
 uint8_t lcd_contrast_lvl = CONTRAST_STOCK;
 uint8_t am_mod = AM_MOD_DEFAULT;
 int16_t freq_cal;
+int16_t low_cut_hz = 20;
 
 int settings_save_own(void)
 {
-    own_block_t own = {OWN_MAGIC8, preamp, filt_hi[FILT_SSB], (uint8_t)wp.page, scope_zoom,
+    own_block_t own = {OWN_MAGIC9, preamp, filt_hi[FILT_SSB], (uint8_t)wp.page, scope_zoom,
                        {mic_eq[0], mic_eq[1], mic_eq[2]}, comp_level, mic_gain, agc_mode,
                        nfm_sql, lcd_contrast_lvl, {filt_hi[FILT_DATA], filt_hi[FILT_AM], filt_hi[FILT_NFM]}, am_mod,
-                       freq_cal, {0, 0}, 0};
+                       freq_cal, (uint16_t)low_cut_hz, 0};
     own.crc = crc_words(&own, 6);
     return ee_write(EE_OWN, &own, sizeof own);
 }
@@ -318,7 +320,8 @@ int settings_load(void)
     const uint32_t *ow = (const uint32_t *)&own;
     bool own_ok = false;
     if (ee_read(EE_OWN, &own, sizeof own) == 0) {
-        bool v8 = own.magic == OWN_MAGIC8 && crc_words(&own, 6) == ow[6];
+        bool v9 = own.magic == OWN_MAGIC9 && crc_words(&own, 6) == ow[6];
+        bool v8 = v9 || (own.magic == OWN_MAGIC8 && crc_words(&own, 6) == ow[6]);
         bool v7 = v8 || (own.magic == OWN_MAGIC7 && crc_words(&own, 6) == ow[6]);
         bool v6 = v7 || (own.magic == OWN_MAGIC6 && crc_words(&own, 5) == ow[5]);
         bool v5 = v6 || (own.magic == OWN_MAGIC5 && crc_words(&own, 5) == ow[5]);
@@ -350,6 +353,8 @@ int settings_load(void)
             lcd_contrast_lvl = own.contrast <= CONTRAST_MAX ? own.contrast : CONTRAST_STOCK;
         if (v7)
             freq_cal = own.freq_cal >= -FREQ_CAL_MAX && own.freq_cal <= FREQ_CAL_MAX ? own.freq_cal : 0;
+        if (v9)
+            low_cut_hz = own.low_cut >= LOW_CUT_MIN && own.low_cut <= LOW_CUT_MAX ? own.low_cut : 20;
         if (v8)
             am_mod = own.am_mod <= 100 ? own.am_mod : AM_MOD_DEFAULT;
     }

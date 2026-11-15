@@ -111,6 +111,10 @@ extern uint8_t lcd_contrast_lvl;
 /* Own setting FREQ CAL: VersaClock reference crystal error in 0.01 ppm (+-50 ppm). */
 #define FREQ_CAL_MAX 5000
 extern int16_t freq_cal;
+/* Own setting LOW CUT: common high-pass, 10..400 Hz (own block v9). */
+#define LOW_CUT_MIN 10
+#define LOW_CUT_MAX 400
+extern int16_t low_cut_hz;
 #define AM_MOD_DEFAULT 90
 extern uint8_t am_mod;                  /* reserved: formerly AM TX modulation depth, unused (own block v8 byte kept) */
 

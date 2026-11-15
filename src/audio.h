@@ -96,6 +96,8 @@ enum { AGC_OFF, AGC_SOFT, AGC_MED, AGC_HARD };
 void audio_set_agc(int speed);
 /* SSB/AM receive band-pass (16 kHz FIR, up to 6 kHz), lo..hi Hz; safe to call any time (no glitch). */
 void audio_set_rx_filter(float lo_hz, float hi_hz);
+/* Own LOW CUT: common high-pass 10..400 Hz (4th order) for RX and TX in all modes. */
+void audio_set_low_cut(float hz);
 /* Own: NFM squelch gate (the decision is made in radio.c from the S-meter level). */
 void audio_set_nfm_gate(bool open);
 /* CW band-pass: centre (tone) and bandwidth in Hz. */

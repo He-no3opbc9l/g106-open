@@ -197,6 +197,12 @@ static int16_t *digit(void)
     return &wp.digit[mode_class(cur()->mode)];
 }
 
+/* The digipot powers up at full volume. A boot-time write can get lost (stock retries 3 times
+ * with 100 ms pauses, 0x08030890; we used to ignore the result): a failed write is retried from
+ * radio_poll every 100 ms, and the volume is written once more 1 s after boot. */
+static uint32_t vol_retry_at;
+static bool vol_retry;
+
 /* Stock volume curve (0x0802b3d4): 0..46 -> digipot 0..127, 0 mutes the HP driver. */
 static void apply_volume(void)
 {
@@ -215,7 +221,10 @@ static void apply_volume(void)
         fm_mute(v == 0);                /* WFM: HP drivers stay muted, the FM chip mutes */
     else
         codec_hp_gain(v ? 28 : -7);
-    volume_set(pot);
+    if (volume_set(pot) < 0) {
+        vol_retry = true;
+        vol_retry_at = millis() + 100;
+    }
 }
 
 static void apply_preamp(void)
@@ -647,6 +656,7 @@ void radio_init(void)
     rf_init();
     spectrum_init();
     ee_ok = settings_load() == 0;
+    apply_volume();                     /* before the boot melody: the digipot powers up at full volume */
     boot_screen();
     if (memory_mode()) {
         int ch = memory_find(wp.mem_ch, 0);
@@ -663,6 +673,8 @@ void radio_init(void)
     keyer_init();
     apply_keyer();
     apply_volume();
+    vol_retry = true;                   /* once more after the digipot had time to settle */
+    vol_retry_at = millis() + 1000;
     apply_preamp();
     apply_pb0();
     apply_contrast();
@@ -2337,6 +2349,11 @@ void radio_poll(void)
 
     if (state == UI_MSGBOX && now >= msgbox_until)
         state = UI_MAIN;
+
+    if (vol_retry && (int32_t)(now - vol_retry_at) >= 0) {
+        vol_retry = false;
+        apply_volume();                 /* sets vol_retry again if the write failed */
+    }
 
     int d = input_encoder_delta(ENC_TUNE);
     if (d)

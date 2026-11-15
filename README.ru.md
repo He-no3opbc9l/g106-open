@@ -4,7 +4,7 @@
 
 [English](README.md) | **Русский**
 
-💬 [Чат в Telegram](https://t.me/+wcJpx1bO9f9jMjJh) · ⚡ [Установка прошивки через браузер](https://he-no3opbc9l.github.io/xg-flasher)
+💬 [Чат в Telegram](https://t.me/xg_open) · ⚡ [Установка прошивки через браузер](https://he-no3opbc9l.github.io/xg-flasher)
 
 Открытая прошивка для КВ QRP-трансивера **G106**, написанная с нуля на голом C (без HAL и
 RTOS). Она заменяет стоковое приложение (V1.4b01) и работает за **нетронутым стоковым загрузчиком

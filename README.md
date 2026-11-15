@@ -4,7 +4,7 @@
 
 **English** | [Русский](README.ru.md)
 
-💬 [Telegram chat](https://t.me/+wcJpx1bO9f9jMjJh) · ⚡ [Install the firmware in the browser](https://he-no3opbc9l.github.io/xg-flasher)
+💬 [Telegram chat](https://t.me/xg_open) · ⚡ [Install the firmware in the browser](https://he-no3opbc9l.github.io/xg-flasher)
 
 Open-source firmware for the **G106** HF QRP transceiver, written from scratch in bare-metal C
 (no HAL, no RTOS). It replaces the stock application (V1.4b01) and runs behind the **untouched stock

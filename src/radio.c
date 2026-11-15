@@ -128,12 +128,6 @@ static const setting_t set_agc = {AGC_OFF, AGC_HARD, "AGC:", NULL, agc_names, &a
 /* Own: NFM squelch (stock has no NFM): opens when the S-meter level reaches nfm_sql x 2 dB
  * (3 steps per S unit: 24 = S9, 30 = S9+12); shown as an arrow over the S-meter. */
 static const setting_t set_sql = {0, 30, "NFM SQL:", "%o", NULL, &nfm_sql, 1, ST_OWN};
-/* Own: AM TX modulation depth (of the RMS-levelled mic signal), 0..100 %. */
-static const setting_t set_am_mod = {0, 100, "AM MOD:", "%d%%", NULL, &am_mod, 1, ST_OWN};
-/* Own diagnostic (not stored): AM TX modulated by a 1 kHz sine at exactly AM MOD instead of the mic. */
-static uint8_t am_tone;
-static const char *const off_on_names[] = {"OFF", "ON "};
-static const setting_t set_am_tone = {0, 1, "AM TONE:", NULL, off_on_names, &am_tone, 1, ST_OWN};
 static const setting_t set_tx_power = {0, 2, "TX POWER:", NULL, txp_names,
                                        &wp.dsp_opt, 2, ST_WORKPARAMS};
 /* Own: LCD contrast, -10..+10 around the stock register value 0x38 (2 per step). */
@@ -144,11 +138,6 @@ static const setting_t set_contrast = {0, CONTRAST_MAX, "CONTRAST:", "%r", NULL,
 static const setting_t set_freq_cal = {-FREQ_CAL_MAX, FREQ_CAL_MAX, "FREQ CAL:", "%p", NULL,
                                        &freq_cal, 2, ST_OWN};
 static const float tx_power[3] = {0.2f, 0.4f, 1.0f};      /* stock 0x10000080 */
-/* Own: AM drive. The PA is linear up to about the MID CW level (CW carrier LOW 7.0 / MID 12.7 /
- * HIGH 15.2 Vrms): with the stock factors the AM carrier (1/2 of the peak) sat in saturation at
- * HIGH and the modulation was crushed (1 kHz test tone loud on LOW, almost gone on HIGH).
- * Here the AM envelope peak at HIGH = the MID CW level (carrier ~1 W, PEP ~4 W). */
-static const float tx_power_am[3] = {0.2f, 0.3f, 0.4f};
 
 static void apply_contrast(void)
 {
@@ -196,11 +185,6 @@ static bool memory_mode(void)
 static vfo_t *cur(void)
 {
     return memory_mode() ? &mem_work : &wp.vfo[wp.cur_vfo];
-}
-
-static float tx_drive(int idx)
-{
-    return cur()->mode == MODE_AM ? tx_power_am[idx] : tx_power[idx];
 }
 
 static int mode_class(int mode)
@@ -466,7 +450,7 @@ int radio_tx_start(int signal, int power_idx)
     if (power_idx < 0 || power_idx > 2)
         power_idx = wp.dsp_opt;
     audio_tx_ramp(false);
-    audio_set_tx(tx_drive(power_idx), stock_settings.tx_dc_i, stock_settings.tx_dc_q);
+    audio_set_tx(tx_power[power_idx], stock_settings.tx_dc_i, stock_settings.tx_dc_q);
     rf_set_freq_lo(tx_freq(), 0);       /* TX: no CW / AM LO offset */
     bool data = cur()->mode == MODE_LD || cur()->mode == MODE_UD;
     audio_set_tx_source(data);
@@ -675,7 +659,6 @@ void radio_init(void)
     }
     audio_set_mic_eq(mic_eq[0] - 12, mic_eq[1] - 12, mic_eq[2] - 12);
     audio_set_comp(comp_level);
-    audio_set_am_mod(am_mod);
     audio_set_agc(agc_mode);
     keyer_init();
     apply_keyer();
@@ -1010,7 +993,7 @@ static void setting_set(const setting_t *s, int v)
     if (s == &set_mic_gain && txing)
         codec_micpga(mic_gain);         /* live while talking from the SETTINGS menu */
     if (s == &set_tx_power && txing)
-        audio_set_tx(tx_drive(wp.dsp_opt), stock_settings.tx_dc_i, stock_settings.tx_dc_q);
+        audio_set_tx(tx_power[wp.dsp_opt], stock_settings.tx_dc_i, stock_settings.tx_dc_q);
     if (s == &set_contrast)
         apply_contrast();
     if (s == &set_freq_cal) {
@@ -1021,10 +1004,6 @@ static void setting_set(const setting_t *s, int v)
         audio_set_mic_eq(mic_eq[0] - 12, mic_eq[1] - 12, mic_eq[2] - 12);
     if (s == &set_comp)
         audio_set_comp(comp_level);
-    if (s == &set_am_mod)
-        audio_set_am_mod(am_mod);
-    if (s == &set_am_tone)
-        audio_set_am_tone(am_tone);
     if (s == &set_mic_gain)
         param2.mic_gain = mic_gain > 30 ? 30 : mic_gain;   /* stock block: stock range only */
     if (s == &set_agc)
@@ -1472,7 +1451,6 @@ static const mitem_t mi_tx[] = {
     {"TX POWER", MI_SET, &set_tx_power}, {"MIC GAIN", MI_SET, &set_mic_gain},
     {"COMPRESSOR", MI_SET, &set_comp}, {"EQ 300Hz", MI_SET, &set_eq_low},
     {"EQ 1200Hz", MI_SET, &set_eq_mid}, {"EQ 2500Hz", MI_SET, &set_eq_high},
-    {"AM MOD", MI_SET, &set_am_mod}, {"AM TEST TONE", MI_SET, &set_am_tone},
 };
 static const mitem_t mi_cw[] = {
     {"KEY SPEED", MI_SET, &set_key_speed}, {"KEY MODE", MI_SET, &set_key_mode},
@@ -2301,7 +2279,7 @@ static void handle_key(int ev)
 static void edit_spin(int d, uint32_t now)
 {
     static uint32_t last;
-    if (edit != &set_freq_cal && edit != &set_am_mod && edit->max - edit->min >= 100 && (now - last < 50 || d > 1 || d < -1))
+    if (edit != &set_freq_cal && edit->max - edit->min >= 100 && (now - last < 50 || d > 1 || d < -1))
         d *= 10;                        /* FREQ CAL: always 0.01 ppm */
     last = now;
     int v = edit_value + d;

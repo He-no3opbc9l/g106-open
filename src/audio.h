@@ -65,8 +65,6 @@ void audio_set_tx_iq(int amp, int phase);
 void audio_set_mic_eq(int low_db, int mid_db, int high_db);
 /* Own: speech compressor 0 = off .. 10 (max boost 2 dB per step), microphone only. */
 void audio_set_comp(int level);
-void audio_set_am_mod(int pct);           /* AM TX modulation depth 0..100 % (of the RMS level) */
-void audio_set_am_tone(bool on);          /* diagnostic: AM TX tone 1 kHz at AM MOD */
 /* TX audio source: false = microphone (left ADC), true = line/data input (right ADC). */
 void audio_set_tx_source(bool data);
 float audio_tx_level(void);

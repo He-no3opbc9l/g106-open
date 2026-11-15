@@ -112,7 +112,7 @@ extern uint8_t lcd_contrast_lvl;
 #define FREQ_CAL_MAX 5000
 extern int16_t freq_cal;
 #define AM_MOD_DEFAULT 90
-extern uint8_t am_mod;                  /* own setting: AM TX modulation depth 0..100 % */
+extern uint8_t am_mod;                  /* reserved: formerly AM TX modulation depth, unused (own block v8 byte kept) */
 
 /* Returns 0 if the stock work params were valid (CRC ok), <0 if defaults were used. */
 int settings_load(void);

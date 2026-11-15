@@ -58,7 +58,7 @@ Deliberate differences from stock:
 | FREQ CAL | reference crystal correction ±50 ppm in 0.01 ppm steps (SETTINGS > CAL; stock has none) |
 | Preamp | global, not per VFO/band |
 | TX switching | 10 ms relay delay + 10 ms ramps, no band limits |
-| AM TX | mic ×8 → RMS leveller, modulation depth AM MOD 0–100 % of the RMS (default 90 %, SETTINGS > TX; peaks clipped to an envelope of 0..1); AM drive LOW/MID/HIGH = 0.2/0.3/0.4 (stock 0.2/0.4/1.0: on HIGH the carrier sits in PA saturation and the modulation is crushed), envelope peak on HIGH ≈ the CW MID level (carrier ~1 W); AM TEST TONE = 1 kHz tone at exactly AM MOD for checking |
+| AM TX | as stock |
 | NFM TX | speech compressor always on (≥ +20 dB) + limiter (±2.5 kHz) |
 | NFM | enabled in the MODE cycle (stock lists it but disables it): ±2.5 kHz deviation, 6 dB/oct pre-/de-emphasis; SQL = squelch OFF / 1..30 by the S-meter level (2 dB per step), its threshold is shown as an arrow over the S-meter (page 6) |
 

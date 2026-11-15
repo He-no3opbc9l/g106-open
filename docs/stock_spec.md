@@ -231,9 +231,9 @@ Stock AM TX (DMA ISR, mode 7, 48 kHz, no decimation): mic sample -> 4-biquad ban
 (0x0803873c, +5.5 dB, ~50 Hz..5 kHz) -> x 0.476 (table +0x60) + 0.5 -> 5-biquad low-pass
 (0x08038914, +6 dB, cut ~4.5 kHz) -> x 0.05 x 0.495 -> I = Q, x power. No limiter / ALC:
 modulation = 1.8 x the raw mic sample (100 % at mic 0.28 FS), carrier 0.0248 FS x power.
-Stock AM uses the same power factors as CW (0.2 / 0.4 / 1.0), so on HIGH the carrier alone is near
-PA saturation and upward modulation is lost (open firmware, 1 kHz AM test tone at 50 %: loud on LOW,
-almost inaudible on HIGH). Own: AM drive 0.2 / 0.3 / 0.4.
+Stock AM uses the same power factors as CW (0.2 / 0.4 / 1.0). The open firmware ports the chain 1:1
+(`am_tx` in audio.c, coefficients copied from the stock tables, LPF DC gain 2 -> carrier 0.0247 FS
+as in the stock snapshot): no leveller, EQ, compressor, AM MOD / drive deviations any more.
 Shift registers (filters) need slow bit-banging (~1 µs per phase).
 
 ## CAT (CI-V)

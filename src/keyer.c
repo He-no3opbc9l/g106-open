@@ -12,7 +12,6 @@ enum { ELEM_NONE, ELEM_DOT, ELEM_DASH };
 
 static volatile bool enabled, ready, request;
 static volatile bool qsk_on = true;    /* stock init: +0x24 = 1 at boot, whatever the saved QSK flag says */
-static volatile bool carrier;           /* own: PTT held in CW = steady carrier (tests / calibration) */
 static volatile int speed_wpm = 20, mode = MODE_MAN, iambic = 1, hang_ms = 500, tone_hz = 800;
 static volatile float dot_ms = 60.0f, ratio = 3.0f;
 
@@ -95,11 +94,6 @@ void keyer_enable(bool on)
     enabled = on;
 }
 
-void keyer_set_carrier(bool on)
-{
-    carrier = on;
-}
-
 void keyer_set_ready(bool r)
 {
     ready = r;
@@ -125,7 +119,7 @@ bool keyer_down(void)
 /* Stock key-out callback 0x0802221c: sidetone on the edges, carrier envelope, TX request. */
 static void key_out(int k, int act)
 {
-    bool on = k || carrier;             /* own: PTT carrier gets the sidetone too */
+    bool on = k;
     if (on != key_flag) {
         key_flag = on;
         if (on)

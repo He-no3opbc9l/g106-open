@@ -38,8 +38,7 @@ Working on the radio:
   ramps, QSK hang time (short press of the QSK soft key switches key-controlled TX on / off, as
   stock: after power-up the key works right away, switching QSK off with the soft key makes it work only
   while PTT is held). Not tested with a real key yet.
-  Unlike stock, holding PTT (or CAT PTT) in CW / CWR also sends a steady carrier on the dial
-  frequency with the sidetone - handy for tests and calibration.
+  PTT / CAT PTT in CW / CWR only switch to TX (as stock); the carrier comes from the key.
 - Split (SPL, page 4): RX on the current VFO, TX on the other one (frequency only), SPL icon, the
   TX VFO is shown on the main line while transmitting; CAT 0F. No TX in split + memory mode, as stock.
 - WFM broadcast receiver (built-in FM chip): seek and channels.

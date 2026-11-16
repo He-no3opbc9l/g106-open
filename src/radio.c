@@ -2499,16 +2499,13 @@ void radio_poll(void)
         cal_poll_tx(want_tx);
     } else if (cw) {
         /* CW (stock radio_trx_task + keyer): the paddles request TX, the keyer ramps the carrier
-         * and stays "active" for the QSK time after the last element. Deviation from stock
-         * (where PTT only switches the T/R relays): PTT / CAT PTT held in CW also give a steady
-         * carrier at the dial frequency (10 ms ramps, with the sidetone) for tests and calibration. */
-        keyer_set_carrier(want_tx && txing);
+         * and stays "active" for the QSK time after the last element. PTT / CAT PTT only switch
+         * to TX (as stock); the carrier comes from the key alone. */
         bool req = keyer_request() && keyer_qsk();
         if ((want_tx || req) && !txing && state == UI_MAIN) {
             if (radio_tx_start(AUDIO_TX_CARRIER, -1) == 0)
                 keyer_set_ready(true);
         } else if (txing && !want_tx && !keyer_active()) {
-            keyer_set_carrier(false);
             keyer_set_ready(false);
             radio_tx_stop();
         }

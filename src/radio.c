@@ -255,6 +255,7 @@ static void apply_pb0(void)
 /* LO offset per mode in RX, as stock radio_trx_task: CW -tone, CWR +tone, AM +100 Hz;
  * NFM (own) +100 Hz too, so an unmodulated carrier is not taken out by the DC block. */
 static bool txing;
+static bool ext_ptt;            /* PC4 (rear connector PTT line, active low), debounced; see radio_poll */
 
 /* Split (stock flags bit2): RX on the current VFO, TX on the other one (frequency only; the mode
  * stays the current VFO's). Not in memory mode: stock refuses TX there (error beep). */
@@ -483,7 +484,8 @@ int radio_tx_start(int signal, int power_idx)
     codec_route_tx(data, mic_gain);
     pin(GPIOA, 8, false);
     delay_ms(10);
-    pin(GPIOC, 5, true);                /* PA on */
+    if (!ext_ptt)                       /* stock 0x0802a1e0: not for a PC4 request (PC4 is only */
+        pin(GPIOC, 5, true);            /* sampled while PC5 is low); PA on */
     pin(GPIOC, 10, false);              /* LED red */
     pin(GPIOA, 15, true);
     audio_tx_ramp(signal != AUDIO_TX_CARRIER);     /* CW: the keyer ramps the carrier */
@@ -2472,7 +2474,24 @@ void radio_poll(void)
     } else {
         ptt_since = 0;
     }
-    bool want_tx = ptt_state || cat_ptt();
+    /* Second TX request, stock 0x0802a000: PC4 low (3 ms debounce), sampled only while PC5 is low
+     * (PC5 stays low for a TX started by this request, so the release is seen too). */
+    static uint32_t ext_since;
+    if (GPIOC->ODR & (1u << 5)) {
+        ext_ptt = false;
+        ext_since = 0;
+    } else {
+        bool ext_raw = input_raw_misc() & 4;
+        if (ext_raw == ext_ptt)
+            ext_since = 0;
+        else if (!ext_since)
+            ext_since = now;
+        else if (now - ext_since >= 3) {
+            ext_ptt = ext_raw;
+            ext_since = 0;
+        }
+    }
+    bool want_tx = ptt_state || cat_ptt() || ext_ptt;
     int m = cur()->mode;
     bool cw = m == MODE_CW || m == MODE_CWR;
     keyer_enable(cw && state == UI_MAIN);

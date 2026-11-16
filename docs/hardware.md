@@ -108,11 +108,13 @@ Used areas: 0x0000, 0x0400–0x05FF, 0x0800, 0x0C00, 0x1000.
 - Encoders: tune A=PC13 B=PB9; aux (volume in stock) A=PB8 B=PC12.
 - **PTT = PC2** (active low). PC3 and PB2 read low at idle (PB2 = BOOT1 strap).
   **PA6 = dot paddle, PA7 = dash paddle** (active low, pull-up; stock keyer 0x080221fc, not yet tried
-  with a real key). PC4: stock samples it (3 ms debounce, only while PC5 is low) as a TX request
-  without switching PC5 on; role unknown, not used here.
+  with a real key). **PC4 = second TX request** (probably the TTL PTT line of the rear DE-9 connector, not
+  confirmed on the bench): stock radio_trx_task 0x0802a000 samples it (3 ms debounce, only while PC5 is low,
+  active low) like PTT, but a TX started by it does not set PC5 (so PC5 stays low and the release is seen).
+  Implemented the same way in `radio_poll` / `radio_tx_start`.
 - Beeper TIM1 CH4 / PA11 works.
 
-Not found yet: digipot @0x2E role, PC4 role.
+Not found yet: digipot @0x2E role.
 
 Live dump of stock V1.4b01 while running (mode / output level). Roles still to be reversed:
 

@@ -32,7 +32,7 @@ Working on the radio:
 - RX: SSB, CW, AM, NFM. 48 kHz I/Q → DC block → adaptive I/Q balance → 16 kHz SSB phasing demodulator
   (191-tap Hilbert), CW biquad filters, AM envelope, NFM discriminator with de-emphasis and squelch, band-pass filter, dB AGC with look-ahead.
 - 1024-point FFT spectrum scope with zoom and an FFT-based S-meter.
-- TX: SSB, AM and NFM voice via PTT, data input for L-D / U-D (digital modes).
+- TX: SSB, AM and NFM voice via PTT (front PTT and the rear-connector TTL PTT line), data input for L-D / U-D (digital modes).
 - CW TX as stock: iambic / straight keyer on the key jack (PA6 dot, PA7 dash; KS speed, KM MAN /
   AUTO-L / AUTO-R, IMB mode A / B, CWR dash ratio), sidetone at the CWT pitch, 10 ms keying
   ramps, QSK hang time (short press of the QSK soft key switches key-controlled TX on / off, as

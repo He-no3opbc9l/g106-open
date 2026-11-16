@@ -145,6 +145,7 @@ int settings_save_param2(void)
 #define OWN_MAGIC7  0x37504F47u     /* "GOP7": v7, CRC over 6 words (+ FREQ CAL) */
 #define OWN_MAGIC8  0x38504F47u     /* "GOP8": v8, CRC over 6 words (+ AM MOD in the former pad2) */
 #define OWN_MAGIC9  0x39504F47u     /* "GOP9": v9, CRC over 6 words (+ LOW CUT in the former pad3) */
+#define OWN_MAGICA  0x41504F47u     /* "GOPA": v10, CRC over 7 words (+ CW decoder) */
 typedef struct {
     uint32_t magic;
     uint8_t preamp;
@@ -161,8 +162,13 @@ typedef struct {
     uint8_t am_drive;             /* v8: AM TX carrier level 1..20 (was the AM depth 0..100 %; v1..v7: pad) */
     int16_t freq_cal;           /* v7: reference crystal error, 0.01 ppm */
     uint16_t low_cut;           /* v9: LOW CUT 10..400 Hz (v1..v8: pad, 0) */
-    uint32_t crc;               /* v1: word 2, v2: word 3, v3/v4: word 4, v5/v6: word 5, v7: word 6 */
+    uint8_t cw_dec;             /* v10: CW decoder 0 off / 1 on */
+    uint8_t cw_dec_level;       /* v10: 0 = AUTO, 1..20 dB over the noise floor */
+    uint16_t pad4;
+    uint32_t crc;               /* v1: word 2, v2: word 3, v3/v4: word 4, v5/v6: word 5, v7..v9: word 6,
+                                   v10: word 7 */
 } own_block_t;
+_Static_assert(sizeof(own_block_t) == 32, "own block = one EEPROM page");
 
 uint8_t filt_hi[FILT_COUNT] = {27, 30, 40, 30};
 uint8_t scope_zoom = 10;
@@ -175,14 +181,16 @@ uint8_t lcd_contrast_lvl = CONTRAST_STOCK;
 uint8_t am_drive = AM_DRIVE_DEFAULT;
 int16_t freq_cal;
 int16_t low_cut_hz = 20;
+uint8_t cw_dec;
+uint8_t cw_dec_level;
 
 int settings_save_own(void)
 {
-    own_block_t own = {OWN_MAGIC9, preamp, filt_hi[FILT_SSB], (uint8_t)wp.page, scope_zoom,
+    own_block_t own = {OWN_MAGICA, preamp, filt_hi[FILT_SSB], (uint8_t)wp.page, scope_zoom,
                        {mic_eq[0], mic_eq[1], mic_eq[2]}, comp_level, mic_gain, agc_mode,
                        nfm_sql, lcd_contrast_lvl, {filt_hi[FILT_DATA], filt_hi[FILT_AM], filt_hi[FILT_NFM]}, am_drive,
-                       freq_cal, (uint16_t)low_cut_hz, 0};
-    own.crc = crc_words(&own, 6);
+                       freq_cal, (uint16_t)low_cut_hz, cw_dec, cw_dec_level, 0, 0};
+    own.crc = crc_words(&own, 7);
     return ee_write(EE_OWN, &own, sizeof own);
 }
 
@@ -320,7 +328,8 @@ int settings_load(void)
     const uint32_t *ow = (const uint32_t *)&own;
     bool own_ok = false;
     if (ee_read(EE_OWN, &own, sizeof own) == 0) {
-        bool v9 = own.magic == OWN_MAGIC9 && crc_words(&own, 6) == ow[6];
+        bool v10 = own.magic == OWN_MAGICA && crc_words(&own, 7) == ow[7];
+        bool v9 = v10 || (own.magic == OWN_MAGIC9 && crc_words(&own, 6) == ow[6]);
         bool v8 = v9 || (own.magic == OWN_MAGIC8 && crc_words(&own, 6) == ow[6]);
         bool v7 = v8 || (own.magic == OWN_MAGIC7 && crc_words(&own, 6) == ow[6]);
         bool v6 = v7 || (own.magic == OWN_MAGIC6 && crc_words(&own, 5) == ow[5]);
@@ -357,6 +366,10 @@ int settings_load(void)
             low_cut_hz = own.low_cut >= LOW_CUT_MIN && own.low_cut <= LOW_CUT_MAX ? own.low_cut : 20;
         if (v8)
             am_drive = own.am_drive >= 1 && own.am_drive <= AM_DRIVE_MAX ? own.am_drive : AM_DRIVE_DEFAULT;
+        if (v10) {
+            cw_dec = own.cw_dec & 1;
+            cw_dec_level = own.cw_dec_level <= CW_DEC_LEVEL_MAX ? own.cw_dec_level : 0;
+        }
     }
     if (own_ok) {
         preamp = own.preamp & 1;

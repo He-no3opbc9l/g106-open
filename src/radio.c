@@ -24,6 +24,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "keyer.h"
+#include "cwdec.h"
 #include <math.h>
 #include "stm32f4.h"
 #include "system.h"
@@ -75,7 +76,8 @@ typedef struct {
                                        "%h" = value in 0.5 dB shown as "12.5dB",
                                        "%o" = number, 0 shown as "OFF",
                                        "%r" = signed offset from the middle of the range,
-                                       "%p" = 0.01 ppm shown as "+1.23ppm" */
+                                       "%p" = 0.01 ppm shown as "+1.23ppm",
+                                       "%a" = dB, 0 shown as "AUTO" */
     const char *const *names;       /* value names indexed by value */
     void *var;
     uint8_t size;                   /* 1, 2 = int16 */
@@ -142,6 +144,12 @@ static const setting_t set_contrast = {0, CONTRAST_MAX, "CONTRAST:", "%r", NULL,
  * would be tuned too high). */
 static const setting_t set_freq_cal = {-FREQ_CAL_MAX, FREQ_CAL_MAX, "FREQ CAL:", "%p", NULL,
                                        &freq_cal, 2, ST_OWN};
+/* Own: CW decoder (cwdec.c), text in place of the VFO B line in CW / CWR; threshold AUTO or
+ * 1..20 dB over the noise floor. */
+static const char *const onoff_names[] = {"OFF", "ON"};
+static const setting_t set_cw_dec = {0, 1, "CW DECODER:", NULL, onoff_names, &cw_dec, 1, ST_OWN};
+static const setting_t set_cw_dec_lvl = {0, CW_DEC_LEVEL_MAX, "DEC LEVEL:", "%a", NULL,
+                                         &cw_dec_level, 1, ST_OWN};
 static const float tx_power[3] = {0.2f, 0.4f, 1.0f};      /* stock 0x10000080 */
 
 static void apply_contrast(void)
@@ -677,6 +685,7 @@ void radio_init(void)
     audio_set_comp(comp_level);
     audio_set_am_drive(am_drive);
     audio_set_agc(agc_mode);
+    cwdec_set_level(cw_dec_level);
     keyer_init();
     apply_keyer();
     apply_volume();
@@ -729,6 +738,62 @@ static void draw_main_freq(uint32_t f, int hl)
         bool inv = *p != '.' && d-- == hl;
         x = lcd_text_f(&font_freq, x, 10, one, inv);
     }
+}
+
+/* Own CW decoder: runs in CW / CWR with the decoder on, in RX on the main screens (also while
+ * the SETTINGS menu is open), not for 150 ms after TX (relay switching). Frames come from the
+ * DSP interrupt (audio_cwdec_read); a new character asks for a redraw. */
+static bool cwdec_shown(int mode)
+{
+    return cw_dec && (mode == MODE_CW || mode == MODE_CWR);
+}
+
+static void cwdec_poll(uint32_t now)
+{
+    static bool on;
+    static uint32_t rx_since, seq;
+    bool want = cwdec_shown(cur()->mode) && !txing && state != UI_FM && state != UI_TXCAL;
+    if (txing)
+        rx_since = now;
+    if (want != on) {
+        on = want;
+        audio_cwdec_enable(on);
+        if (on)
+            cwdec_reset();      /* new signal conditions; the text stays */
+    }
+    float p[32];
+    int n;
+    while ((n = audio_cwdec_read(p, 32)) > 0)
+        if (now - rx_since >= 150)
+            for (int i = 0; i < n; i++)
+                cwdec_feed(p[i]);
+    if (cwdec_seq() != seq) {
+        seq = cwdec_seq();
+        dirty = true;
+    }
+}
+
+/* Decoded text on the VFO B line (y 31), newest character on the right end; speed at the right
+ * edge, drawn inverted while the detector sees the key down (tuning aid). In memory mode the
+ * "MEMO" tag keeps x >= 85 and the speed is not shown. */
+static void draw_cwdec(void)
+{
+    char t[CWDEC_TEXT_N + 1];
+    int right = 127;
+    if (!memory_mode()) {
+        int wpm = cwdec_wpm();
+        if (wpm)
+            snprintf(t, sizeof t, "%d", wpm > 99 ? 99 : wpm);
+        else
+            snprintf(t, sizeof t, "--");
+        int w = lcd_text_width(&font8, t);
+        lcd_text_f(&font8, 127 - w, 31, t, cwdec_key());
+        right = 127 - w - 3;
+    } else {
+        right = 83;
+    }
+    int n = cwdec_text(t, (right - 3 + 1) / 6);
+    lcd_text_f(&font8, right + 1 - n * 6, 31, t, false);
 }
 
 /* NFM squelch threshold on the S-meter scale (0..100 = -121..-21 dBm), 0 = off. */
@@ -1029,6 +1094,8 @@ static void setting_set(const setting_t *s, int v)
         param2.mic_gain = mic_gain > 30 ? 30 : mic_gain;   /* stock block: stock range only */
     if (s == &set_agc)
         audio_set_agc(agc_mode);
+    if (s == &set_cw_dec_lvl)
+        cwdec_set_level(cw_dec_level);
     if (s == &set_cw_tone || s == &set_key_speed || s == &set_key_mode || s == &set_iambic ||
         s == &set_cw_ratio || s == &set_qsk_time)
         apply_keyer();
@@ -1085,6 +1152,8 @@ static void setting_text(const setting_t *s, int val, char *v, size_t n)
         snprintf(v, n, "%+d", val - (s->min + s->max) / 2);
     else if (!strcmp(s->fmt, "%p"))
         snprintf(v, n, "%c%d.%02dppm", val < 0 ? '-' : '+', abs(val) / 100, abs(val) % 100);
+    else if (!strcmp(s->fmt, "%a"))
+        snprintf(v, n, val ? "%d dB" : "AUTO", val);
     else if (!strcmp(s->fmt, "%h"))
         snprintf(v, n, "%d.%ddB", val / 2, val % 2 * 5);
     else
@@ -1478,6 +1547,7 @@ static const mitem_t mi_cw[] = {
     {"IAMBIC", MI_SET, &set_iambic}, {"DOT:DASH", MI_SET, &set_cw_ratio},
     {"CW TONE", MI_SET, &set_cw_tone}, {"CW FILTER", MI_SET, &set_cw_flt},
     {"QSK", MI_QSK, NULL}, {"QSK DELAY", MI_SET, &set_qsk_time},
+    {"DECODER", MI_SET, &set_cw_dec}, {"DECODER LEVEL", MI_SET, &set_cw_dec_lvl},
 };
 static const mitem_t mi_disp[] = {
     {"SCOPE", MI_SET, &set_disp}, {"SCOPE ZOOM", MI_SET, &set_zoom}, {"CONTRAST", MI_SET, &set_contrast},
@@ -2151,8 +2221,11 @@ static void draw(void)
     lcd_text_f(&font8, 3, 19, vi ? "B" : "A", false);
     draw_main_freq(v->freq, state == UI_MAIN || state == UI_MSGBOX ? *digit() : -1);
 
+    bool cwd = cwdec_shown(v->mode) && state != UI_MC && state != UI_MW && state != UI_EDIT && !stx;
     if (popup_until && now < popup_until) {
         lcd_text_f(&font8, 3, 31, popup_text, false);
+    } else if (cwd) {
+        draw_cwdec();
     } else if (disp_mode != 2) {
         lcd_text_f(&font8, 3, 31, vi ? "A " : "B ", false);
         fmt_freq(s, wp.vfo[!vi].freq);
@@ -2184,7 +2257,8 @@ static void draw(void)
             static const uint8_t scope_h[3] = {15, 22, 34};
             if (disp_mode == 0)
                 draw_smeter();
-            draw_scope(63, scope_h[disp_mode]);
+            /* BIG SCOPE reaches up to y 29: lower it under the decoder line */
+            draw_scope(63, cwd && disp_mode == 2 ? 23 : scope_h[disp_mode]);
         }
         if (state == UI_MSGBOX)
             draw_msgbox();
@@ -2448,6 +2522,7 @@ void radio_poll(void)
 
     bool fresh = spectrum_poll(cur()->mode, disp_mode, preamp, scope_zoom / 10.0f, txing);
     squelch_poll(fresh, now);
+    cwdec_poll(now);
     if (dirty || (fresh && now - last_draw >= 40) || now - last_draw >= 200) {
         dirty = false;
         last_draw = now;

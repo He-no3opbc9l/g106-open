@@ -24,7 +24,7 @@ LDFLAGS  := $(ARCH) -T ld/g106_app.ld -nostartfiles --specs=nano.specs --specs=n
             -Wl,--gc-sections -Wl,-Map=$(BUILD)/$(TARGET).map
 LDLIBS   := -lm
 
-.PHONY: all clean flash-swd flash-iap restore-stock-swd stock FORCE
+.PHONY: all clean flash-swd flash-iap restore-stock-swd stock test-cwdec FORCE
 
 all: $(BUILD)/$(TARGET).bin $(BUILD)/$(TARGET).xgf
 
@@ -89,6 +89,12 @@ flash-iap: $(BUILD)/$(TARGET).xgf
 
 restore-stock-swd: $(STOCK_TX)
 	tools/flash_swd.sh $<
+
+# Host test of the CW decoder (simulated receiver tap, see tools/cwdec_test.c); SEED=n varies the noise.
+HOSTCC ?= cc
+test-cwdec: | $(BUILD)
+	$(HOSTCC) -O2 -std=c11 -D_DEFAULT_SOURCE -Wall -Wextra -Isrc tools/cwdec_test.c src/cwdec.c -lm -o $(BUILD)/cwdec_test
+	$(BUILD)/cwdec_test
 
 clean:
 	rm -rf $(BUILD)

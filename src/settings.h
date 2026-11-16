@@ -118,6 +118,11 @@ extern int16_t low_cut_hz;
 #define AM_DRIVE_DEFAULT 6
 #define AM_DRIVE_MAX     20
 extern uint8_t am_drive;                /* own: AM TX carrier level 1..20 (own block v8 byte; old values > 20 = default) */
+/* Own: CW decoder on/off and its threshold, 0 = AUTO, 1..CW_DEC_LEVEL_MAX dB over the noise
+ * floor (own block v10). */
+#define CW_DEC_LEVEL_MAX 20
+extern uint8_t cw_dec;
+extern uint8_t cw_dec_level;
 
 /* Returns 0 if the stock work params were valid (CRC ok), <0 if defaults were used. */
 int settings_load(void);

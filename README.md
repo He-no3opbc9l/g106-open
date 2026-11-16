@@ -42,6 +42,15 @@ Working on the radio:
 - Split (SPL, page 4): RX on the current VFO, TX on the other one (frequency only), SPL icon, the
   TX VFO is shown on the main line while transmitting; CAT 0F. No TX in split + memory mode, as stock.
 - WFM broadcast receiver (built-in FM chip): seek and channels.
+- CW decoder (own, stock has none; SETTINGS > CW > DECODER, default off): in CW / CWR the received
+  Morse is shown as text in place of the VFO B line, newest character on the right, with the
+  estimated speed in WPM at the right edge (shown inverted while the decoder hears the key down -
+  a tuning aid: tune the signal onto the CW tone, the decoder listens 100..200 Hz around it).
+  Speed 5..50 WPM is learnt automatically (also Farnsworth spacing and hand keying), letters,
+  digits, punctuation and the prosigns <AR> <KN> <SK> <AS> <HH> (`*` = unknown code).
+  DECODER LEVEL: AUTO (threshold between noise and signal, nothing is decoded below ~10 dB SNR in
+  the decoder bandwidth) or 1..20 dB over the noise floor for weak signals (too low a level
+  decodes the noise). The decoder pauses while transmitting.
 - CAT: Icom CI-V protocol on USART1 like stock (19200 8N1), see [CAT](#cat).
 
 Deliberate differences from stock:
@@ -96,6 +105,10 @@ the bootloader). `make stock` additionally produces `stock/G106Fw-V1.4b01.bin` (
 and `stock/G106Fw-V1.4b01.txall.bin` (stock app with the TX band limit removed).
 
 `.xgf` files are plain AES-256-ECB; `tools/xgf.py enc|dec` uses the key in `tools/aes_key.hex`.
+
+`make test-cwdec` builds and runs a host test of the CW decoder (`tools/cwdec_test.c`, any C
+compiler): a simulated receiver with keyed tones at 5..50 WPM, noise, fading, hand keying and
+Farnsworth spacing; `SEED=n` varies the noise.
 
 ## Flashing
 
@@ -164,7 +177,7 @@ full list with deviations from stock is at the top of `src/cat.c`.
 |---|---|
 | `src/` | firmware sources (`radio.c` UI, `audio.c` DSP, `spectrum.c` scope, `settings.c` EEPROM, drivers) |
 | `ld/` | linker script (app at `0x08020000`) |
-| `tools/` | `xgf.py` (encrypt/decrypt), `flash_iap.py`, `flash_swd.*`, `extract_stock_gfx.py`, `patch_txall.py`, Ghidra scripts |
+| `tools/` | `xgf.py` (encrypt/decrypt), `flash_iap.py`, `flash_swd.*`, `extract_stock_gfx.py`, `patch_txall.py`, `cwdec_test.c` (host test), Ghidra scripts |
 | `docs/hardware.md` | hardware map: pins, peripherals, chips, bootloader contract |
 | `docs/stock_spec.md` | reverse-engineered stock behaviour (EEPROM layout, keys, UI, DSP, TX) |
 

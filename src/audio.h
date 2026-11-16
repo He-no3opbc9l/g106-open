@@ -77,7 +77,7 @@ bool audio_spectrum_ready(void);
 void audio_profile(uint32_t out[4]);
 /* NaN/inf guard: number of DSP state resets, first bad variable (1-based index into the list
  * in dsp_check(): agc_db agc_peak agc_env iqb_gain iqb_phase dc_i dc_q y12 am_dc tx_dc alc_env
- * comp_env cw_y eq_y fm_de nfm_gain fm_phase), 0 = never. */
+ * comp_env cw_y eq_y fm_de nfm_gain fm_phase cwd_acc), 0 = never. */
 void audio_dsp_faults(uint32_t *resets, uint32_t *first);
 /* Adaptive RX I/Q balance in use: I gain and Q += phase * I. */
 void audio_iq_balance(float *gain, float *phase);
@@ -102,7 +102,11 @@ void audio_set_low_cut(float hz);
 void audio_set_am_drive(int level);
 /* Own: NFM squelch gate (the decision is made in radio.c from the S-meter level). */
 void audio_set_nfm_gate(bool open);
-/* CW band-pass: centre (tone) and bandwidth in Hz. */
+/* CW band-pass: centre (tone) and bandwidth in Hz (also sets the decoder's own band-pass). */
 void audio_set_cw_filter(float tone_hz, float bw_hz);
+/* Own CW decoder tap (CW / CWR only): tone power, one value per CWDEC_FRAME_MS. read() takes up
+ * to max frames out of the ring (256 ms deep), returns the count. */
+void audio_cwdec_enable(bool on);
+int audio_cwdec_read(float *p, int max);
 
 #endif

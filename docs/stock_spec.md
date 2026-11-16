@@ -342,3 +342,23 @@ A generic keyer state machine (struct at 0x20002008) is ticked from the TIM2 1 m
   (0x08032c0c), icon "QSK" at (109,1) while set. In the keyer tick (0x0802740c) the flag is copied
   to +0x24; while it is 0 `active` is forced to 0, i.e. the key never requests TX itself: with QSK
   off TX needs PTT (the key then only keys the carrier). Long press = QSK TIME (hang).
+
+## CW decoder (own; stock has none)
+
+Stock V1.4b01 has no CW decoder (no Morse table in the image). Own implementation:
+- Tap (audio.c, DSP interrupt, CW / CWR only, while enabled): the 16 kHz demodulator output ahead of
+  the CWF biquads goes through two own RBJ band-pass biquads at the CW tone, width = CWF clamped to
+  100..200 Hz (a 50 Hz filter rings ~10 ms and eats element gaps at speed); y^2 is averaged over
+  32 samples = 2 ms frames into a 128-frame ring. ~0.2 % CPU.
+- Decoder (cwdec.c, main loop via radio.c `cwdec_poll`, host-tested by `make test-cwdec`): moving
+  average of the power over ~0.2 dot, in dB; noise = mean level in the spaces, peak tracker with
+  fast attack; AUTO threshold = noise + max(SNR - 6 dB, 0.7 SNR), gated below 10 dB SNR, falling
+  hysteresis; manual DECODER LEVEL = noise + 1..20 dB. Glitches < 0.15 dot ignored, marks > 1.5 s =
+  carrier (no element). Dot / dash split = 2-means over the last 16 marks; elements are classified
+  at the end of the character. Gaps: element / character boundary 0.5 dot + 1.5 element gap,
+  character / word boundary 2 dot + 3 element gap (bias-free for a detector that lengthens marks),
+  raised to 5/3 of the median of the recent character gaps (Farnsworth). 10 s without marks ->
+  no WPM shown. Settings in the own EEPROM block v10 "GOPA" (0x1F00, CRC over 7 words):
+  `cw_dec` (0 / 1), `cw_dec_level` (0 = AUTO, 1..20 dB).
+- UI: text on the VFO B line (y 31) in CW / CWR, right-aligned, speed at the right edge (inverted
+  while key down); memory mode: text up to x 83 (MEMO tag), no speed; BIG SCOPE lowered to 23 px.

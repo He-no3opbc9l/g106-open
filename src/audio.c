@@ -4,6 +4,8 @@
 #include "stm32f4.h"
 #include "system.h"
 #include "audio.h"
+#include "fastmath.h"
+#include "cwdec.h"
 
 #define I2S2_BASE     0x40003800
 #define I2S2EXT_BASE  0x40003400
@@ -257,13 +259,75 @@ void audio_set_rx_filter(float lo_hz, float hi_hz)
 typedef struct { float b0, b2, a1, a2, x1, x2, y1, y2; } bq_t;
 static bq_t cw_bq[2];
 
-void audio_set_cw_filter(float tone_hz, float bw)
+static bq_t bq_bandpass(float tone_hz, float bw)
 {
     float w0 = 2 * PI_F * tone_hz / FS2;
     float q = tone_hz / (bw * 1.55f);       /* two stages narrow the -3 dB width by ~0.64 */
     float alpha = sinf(w0) / (2 * q), a0 = 1 + alpha;
-    for (int i = 0; i < 2; i++)
-        cw_bq[i] = (bq_t){alpha / a0, -alpha / a0, -2 * cosf(w0) / a0, (1 - alpha) / a0, 0, 0, 0, 0};
+    return (bq_t){alpha / a0, -alpha / a0, -2 * cosf(w0) / a0, (1 - alpha) / a0, 0, 0, 0, 0};
+}
+
+/* Own CW decoder tap (cwdec.c): its own band-pass at the tone, 100..200 Hz wide whatever CWF is
+ * (a 50 Hz filter rings for ~10 ms and eats the element gaps at speed; 500 Hz lets in more
+ * noise), fed from the demodulator output ahead of CWF; mean power per 2 ms frame into a ring
+ * read by the main loop. ~0.2 % CPU, only while enabled. */
+#define CWD_FRAME (FS2 * CWDEC_FRAME_MS / 1000)
+#define CWD_RING  128                           /* 256 ms of frames */
+static bq_t cwd_bq[2];
+static float cwd_acc;
+static unsigned cwd_n;
+static volatile float cwd_ring[CWD_RING];
+static volatile unsigned cwd_head, cwd_tail;
+static volatile bool cwd_on;
+
+void audio_set_cw_filter(float tone_hz, float bw)
+{
+    bq_t b = bq_bandpass(tone_hz, bw);
+    float dbw = bw < 100 ? 100 : bw > 200 ? 200 : bw;
+    bq_t d = bq_bandpass(tone_hz, dbw);
+    for (int i = 0; i < 2; i++) {
+        cw_bq[i] = b;
+        cwd_bq[i] = d;
+    }
+}
+
+void audio_cwdec_enable(bool on)
+{
+    if (on && !cwd_on) {
+        cwd_tail = cwd_head;                    /* drop stale frames */
+        cwd_acc = 0;
+        cwd_n = 0;
+    }
+    cwd_on = on;
+}
+
+int audio_cwdec_read(float *p, int max)
+{
+    int n = 0;
+    unsigned t = cwd_tail;
+    while (n < max && t != cwd_head) {
+        p[n++] = cwd_ring[t];
+        t = (t + 1) % CWD_RING;
+    }
+    cwd_tail = t;
+    return n;
+}
+
+static float bq_run(bq_t *f, float x);
+
+static inline void cwd_push(float x)
+{
+    float y = bq_run(&cwd_bq[1], bq_run(&cwd_bq[0], x));
+    cwd_acc += y * y;
+    if (++cwd_n == CWD_FRAME) {
+        unsigned h = cwd_head, nx = (h + 1) % CWD_RING;
+        if (nx != cwd_tail) {                   /* full: the frame is lost */
+            cwd_ring[h] = cwd_acc * (1.0f / CWD_FRAME);
+            cwd_head = nx;
+        }
+        cwd_acc = 0;
+        cwd_n = 0;
+    }
 }
 
 /* Own LOW CUT: common high-pass for all modes, 10..400 Hz, 4th-order Butterworth (two RBJ biquads,
@@ -429,27 +493,6 @@ static volatile int agc_speed = AGC_HARD;
 static int agc_hang;
 static float agc_dline[AGC_DELAY];
 static unsigned agc_dpos, agc_sub;
-
-/* Fast log2 / exp2 (newlib's log10f/powf cost ~1000 cycles each here); ~1e-4 accuracy,
- * i.e. far below 0.01 dB in the AGC. */
-static inline float fast_log2(float x)
-{
-    union { float f; uint32_t u; } v = {x};
-    float e = (float)(int)((v.u >> 23) & 0xFF) - 127.0f;
-    v.u = (v.u & 0x007FFFFF) | 0x3F800000;      /* mantissa in [1, 2) */
-    float m = v.f;
-    return e + (-2.49684606f + (4.02854794f + (-2.08121416f + (0.628873618f - 0.0791581614f * m) * m) * m) * m);
-}
-
-static inline float fast_exp2(float x)
-{
-    if (x < -126.0f)
-        return 0.0f;
-    float fi = floorf(x), f = x - fi;
-    float p = 1.0f + f * (0.6951579f + f * (0.2262207f + f * 0.0781009f));
-    union { uint32_t u; float f; } v = {(uint32_t)((int)fi + 127) << 23};
-    return v.f * p;
-}
 
 static float agc(float y)
 {
@@ -634,8 +677,12 @@ static float demod12(audio_mode_t m, float i, float q)
     case AUDIO_LSB:
         return agc(hp_run(hp_rx, bpf_run(ssb_demod(i, q, m == AUDIO_LSB))));
     case AUDIO_CW:
-    case AUDIO_CWR:
-        return agc(hp_run(hp_rx, bq_run(&cw_bq[1], bq_run(&cw_bq[0], ssb_demod(i, q, m == AUDIO_CWR)))));
+    case AUDIO_CWR: {
+        float d = ssb_demod(i, q, m == AUDIO_CWR);
+        if (cwd_on)
+            cwd_push(d);
+        return agc(hp_run(hp_rx, bq_run(&cw_bq[1], bq_run(&cw_bq[0], d))));
+    }
     case AUDIO_AM:
         return agc(hp_run(hp_rx, bpf_run(am_demod(i, q))));
     case AUDIO_NFM:
@@ -1137,8 +1184,11 @@ static void dsp_state_reset(void)
     memset(thbuf, 0, sizeof thbuf);
     memset(tybuf_i, 0, sizeof tybuf_i);
     memset(tybuf_q, 0, sizeof tybuf_q);
-    for (int k = 0; k < 2; k++)
+    for (int k = 0; k < 2; k++) {
         cw_bq[k].x1 = cw_bq[k].x2 = cw_bq[k].y1 = cw_bq[k].y2 = 0;
+        cwd_bq[k].x1 = cwd_bq[k].x2 = cwd_bq[k].y1 = cwd_bq[k].y2 = 0;
+    }
+    cwd_acc = 0;
     for (int k = 0; k < 3; k++)
         eq[k].x1 = eq[k].x2 = eq[k].y1 = eq[k].y2 = 0;
     y12 = am_dc = 0;
@@ -1157,7 +1207,7 @@ static void dsp_check(void)
 {
     const float v[] = {agc_db, agc_peak, agc_env, iqb_gain, iqb_phase, dc_i, dc_q, y12,
                        am_dc, tx_dc, alc_env, comp_env, cw_bq[1].y1, eq[2].y1, fm_de, nfm_gain,
-                       fm_phase};
+                       fm_phase, cwd_acc};
     for (unsigned k = 0; k < sizeof v / sizeof v[0]; k++)
         if (!isfinite(v[k])) {
             if (!dsp_fault)

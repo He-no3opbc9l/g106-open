@@ -11,7 +11,7 @@ enum { MODE_MAN, MODE_AUTO_L, MODE_AUTO_R };
 enum { ELEM_NONE, ELEM_DOT, ELEM_DASH };
 
 static volatile bool enabled, ready, request;
-static volatile bool qsk_on;
+static volatile bool qsk_on = true;    /* stock init: +0x24 = 1 at boot, whatever the saved QSK flag says */
 static volatile bool carrier;           /* own: PTT held in CW = steady carrier (tests / calibration) */
 static volatile int speed_wpm = 20, mode = MODE_MAN, iambic = 1, hang_ms = 500, tone_hz = 800;
 static volatile float dot_ms = 60.0f, ratio = 3.0f;
@@ -67,6 +67,11 @@ void keyer_set_tone(int hz)
 void keyer_set_qsk(bool on)
 {
     qsk_on = on;
+}
+
+bool keyer_qsk(void)
+{
+    return qsk_on;
 }
 
 static void reset_state(void)

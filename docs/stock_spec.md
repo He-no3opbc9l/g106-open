@@ -342,6 +342,9 @@ A generic keyer state machine (struct at 0x20002008) is ticked from the TIM2 1 m
   (0x08032c0c), icon "QSK" at (109,1) while set. In the keyer tick (0x0802740c) the flag is copied
   to +0x24; while it is 0 `active` is forced to 0, i.e. the key never requests TX itself: with QSK
   off TX needs PTT (the key then only keys the carrier). Long press = QSK TIME (hang).
+  Quirk: the keyer's copy (+0x24 = 0x2000202c) is initialised to 1 at boot (0x08034e..) and only the soft key
+  rewrites it from the flag, so after power-up a key works with QSK "off" (no icon) until the soft key is
+  pressed twice. Ported as is (`keyer.c` `qsk_on = true`, `toggle_qsk` in radio.c).
 
 ## CW decoder (own; stock has none)
 

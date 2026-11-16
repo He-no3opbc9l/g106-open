@@ -36,7 +36,8 @@ Working on the radio:
 - CW TX as stock: iambic / straight keyer on the key jack (PA6 dot, PA7 dash; KS speed, KM MAN /
   AUTO-L / AUTO-R, IMB mode A / B, CWR dash ratio), sidetone at the CWT pitch, 10 ms keying
   ramps, QSK hang time (short press of the QSK soft key switches key-controlled TX on / off, as
-  stock: with QSK off the key only works while PTT is held). Not tested with a real key yet.
+  stock: after power-up the key works right away, switching QSK off with the soft key makes it work only
+  while PTT is held). Not tested with a real key yet.
   Unlike stock, holding PTT (or CAT PTT) in CW / CWR also sends a steady carrier on the dial
   frequency with the sidetone - handy for tests and calibration.
 - Split (SPL, page 4): RX on the current VFO, TX on the other one (frequency only), SPL icon, the

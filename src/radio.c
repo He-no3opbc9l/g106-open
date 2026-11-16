@@ -1052,6 +1052,14 @@ static void apply_keyer(void)
     keyer_set_ratio(2.0f + 0.5f * stock_settings.cw_ratio);
     keyer_set_hang(stock_settings.qsk_time);
     keyer_set_tone(stock_settings.cw_tone);
+}
+
+/* QSK soft key / menu item (stock 0x08032c0c): toggles the saved flag and copies it to the keyer.
+ * The keyer itself starts with QSK enabled after power-up whatever the saved flag is (stock init
+ * 0x20002008+0x24 = 1, nothing else copies the flag), so a straight key works right away. */
+static void toggle_qsk(void)
+{
+    wp.flags ^= WP_FLAG_QSK;
     keyer_set_qsk(wp.flags & WP_FLAG_QSK);
 }
 
@@ -1787,8 +1795,7 @@ static void menu_activate(void)
         apply_preamp();
         break;
     case MI_QSK:
-        wp.flags ^= WP_FLAG_QSK;
-        apply_keyer();
+        toggle_qsk();
         break;
     case MI_BEEP:
         wp.flags ^= WP_FLAG_BEEP;
@@ -1962,8 +1969,7 @@ static void softkey(int k, bool lng)
     case 5: open_edit(&set_cw_tone); break;       /* CWT */
     case 6: open_edit(&set_cw_ratio); break;      /* CWR = CW RATIO */
     case 7:                             /* QSK: key-controlled TX on / off, icon on the main screen */
-        wp.flags ^= WP_FLAG_QSK;
-        apply_keyer();
+        toggle_qsk();
         break;
     case 8: open_edit(&set_key_speed); break;     /* KS */
     case 9: open_edit(&set_key_mode); break;      /* KM */
@@ -2478,7 +2484,7 @@ void radio_poll(void)
          * (where PTT only switches the T/R relays): PTT / CAT PTT held in CW also give a steady
          * carrier at the dial frequency (10 ms ramps, with the sidetone) for tests and calibration. */
         keyer_set_carrier(want_tx && txing);
-        bool req = keyer_request() && (wp.flags & WP_FLAG_QSK);
+        bool req = keyer_request() && keyer_qsk();
         if ((want_tx || req) && !txing && state == UI_MAIN) {
             if (radio_tx_start(AUDIO_TX_CARRIER, -1) == 0)
                 keyer_set_ready(true);

@@ -74,6 +74,7 @@ Deliberate differences from stock:
 | NFM TX | speech compressor always on (≥ +20 dB) + limiter (±2.5 kHz) |
 | NFM | enabled in the MODE cycle (stock lists it but disables it): ±2.5 kHz deviation, 6 dB/oct pre-/de-emphasis |
 | Squelch | NFM and SSB (LSB/USB; not the data modes), own level per mode OFF / 1..30 by the S-meter level (2 dB per step), threshold shown as an arrow over the S-meter; SQL soft key (page 6) = level of the current mode, SQL long = squelch on/off; also SETTINGS > RX (SQUELCH, NFM SQUELCH, SSB SQUELCH). Hang time NFM 150 ms, SSB 500 ms |
+| Start-up / LO | codec (TLV320) and VersaClock registers are read back after init and the init is repeated on a mismatch (up to 3 attempts); the LO divider is written in one burst (integer + fraction) and read back on every frequency change. Stock writes them blindly, in two transactions |
 
 Not done yet (stock parity): power/SWR metering, factory reset.
 

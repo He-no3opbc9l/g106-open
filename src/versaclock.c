@@ -49,7 +49,33 @@ static int resync(void)
     return wr(b, 2);
 }
 
-int vc_init(void)
+volatile uint32_t vc_errs, vc_last_hz;      /* diagnostics: failed writes, last OUT1 request */
+volatile uint32_t vc_init_tries;            /* init attempts of the last vc_init (1 = clean) */
+volatile uint32_t vc_verify_fail;           /* register read-back mismatches (init + set_output) */
+volatile uint32_t vc_bad_reg;               /* last mismatch: reg << 16 | wrote << 8 | read */
+
+/* OUT1 register shadow: what vc_set_output last asked for (0x22..0x2E), checked by the init read-back. */
+static uint8_t out1[13];
+
+/* Read back regs [r, r + n) and compare with exp; 0 = equal. */
+static int verify(uint8_t r, const uint8_t *exp, unsigned n)
+{
+    uint8_t b[32];
+    for (unsigned o = 0; o < n; o += sizeof b) {
+        unsigned k = n - o < sizeof b ? n - o : sizeof b;
+        if (vc_read((uint8_t)(r + o), b, k) < 0)
+            return -1;
+        for (unsigned i = 0; i < k; i++)
+            if (b[i] != exp[o + i]) {
+                vc_verify_fail++;
+                vc_bad_reg = (uint32_t)(r + o + i) << 16 | (uint32_t)exp[o + i] << 8 | b[i];
+                return -1;
+            }
+    }
+    return 0;
+}
+
+static int init_once(void)
 {
     if (wr(vc_image, sizeof vc_image) < 0 || resync() < 0)
         return -1;
@@ -59,7 +85,29 @@ int vc_init(void)
         return -1;
     if (vc_set_output(1, 57080000) < 0)        /* stock start-up value */
         return -1;
-    return resync();
+    if (resync() < 0)
+        return -1;
+    /* Stock writes and hopes; we read the whole map back (all of 0x00..0x69 reads as written, checked
+     * on the G90 body with the same chip and image), with the feedback and OUT1 dividers we set on top. */
+    uint8_t exp[0x6A];
+    for (unsigned i = 0; i < sizeof exp; i++)
+        exp[i] = vc_image[i + 1];
+    for (unsigned i = 1; i < sizeof fb; i++)
+        exp[0x17 + i - 1] = fb[i];
+    for (unsigned i = 0; i < sizeof out1; i++)
+        exp[0x22 + i] = out1[i];
+    return verify(0x00, exp, sizeof exp);
+}
+
+/* Up to 3 full attempts; a failed attempt starts over from the register image. */
+int vc_init(void)
+{
+    for (vc_init_tries = 1; vc_init_tries <= 3; vc_init_tries++) {
+        if (init_once() == 0)
+            return 0;
+        delay_ms(20);
+    }
+    return -1;
 }
 
 int vc_read(uint8_t reg, uint8_t *buf, unsigned n)
@@ -67,7 +115,11 @@ int vc_read(uint8_t reg, uint8_t *buf, unsigned n)
     return i2c_write_read(I2C_BUS1, VC_ADDR, &reg, 1, buf, n);
 }
 
-/* f_out = f_vco / (2 * (int + frac / 2^24)); packing identical to stock (0x080312a0). */
+/* f_out = f_vco / (2 * (int + frac / 2^24)); field packing identical to stock (0x080312a0; G90 stock 0x0800ac94).
+ * Stock writes the integer part (0x2D, 0x2E) and the fraction (0x22..0x25) in two transactions and never reads
+ * them back; between the two the divider is new int + old frac (~5 % off when the integer changes, e.g. at
+ * 18.0375 MHz RF: 20 -> 19). Ours: one burst 0x22..0x2E (spread-spectrum regs 0x26..0x2C rewritten with their
+ * image values), read back, rewritten up to 3 times on a mismatch. */
 int vc_set_output(int ch, uint32_t freq_hz)
 {
     if (ch < 1 || ch > 4 || !freq_hz)
@@ -76,7 +128,25 @@ int vc_set_output(int ch, uint32_t freq_hz)
     uint32_t idiv = (uint32_t)div;
     uint32_t frac = (uint32_t)((div - idiv) * 16777216.0 + 0.5);
 
-    const uint8_t i[] = {(uint8_t)((ch << 4) + 0x1D), idiv >> 4, (idiv << 4) & 0xFF};
-    const uint8_t f[] = {(uint8_t)((ch << 4) + 0x12), frac >> 22, frac >> 14, frac >> 6, (frac << 2) & 0xFF};
-    return wr(i, sizeof i) < 0 || wr(f, sizeof f) < 0 ? -1 : 0;
+    uint8_t base = (uint8_t)((ch << 4) + 0x12);
+    uint8_t b[14];
+    b[0] = base;
+    for (unsigned i = 0; i < 13; i++)
+        b[1 + i] = vc_image[1 + base + i];
+    b[1] = (uint8_t)(frac >> 22);
+    b[2] = (uint8_t)(frac >> 14);
+    b[3] = (uint8_t)(frac >> 6);
+    b[4] = (uint8_t)(frac << 2);
+    b[12] = (uint8_t)(idiv >> 4);
+    b[13] = (uint8_t)(idiv << 4);
+    vc_last_hz = freq_hz;
+    if (ch == 1) {
+        for (unsigned i = 0; i < 13; i++)
+            out1[i] = b[1 + i];
+    }
+    for (int tries = 0; tries < 3; tries++)
+        if (wr(b, sizeof b) == 0 && verify(base, b + 1, 13) == 0)
+            return 0;
+    vc_errs++;
+    return -1;
 }

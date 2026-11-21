@@ -152,6 +152,53 @@ void codec_route_tx(bool data, uint8_t mic_gain)
     }
 }
 
+volatile uint32_t codec_tries;           /* attempts of the last codec_init (1 = clean) */
+volatile uint32_t codec_verify_fail;     /* read-back mismatches */
+volatile uint32_t codec_bad_reg;         /* last mismatch: page << 16 | reg << 8 | read */
+
+/* Last value written to (pg, reg) by t[from..n) and then u[0..un), or -1. */
+static int last_val(const creg_t *t, unsigned from, unsigned n, const creg_t *u, unsigned un,
+                    uint8_t pg, uint8_t reg)
+{
+    int v = -1;
+    for (unsigned i = from; i < n; i++)
+        if (t[i].page == pg && t[i].reg == reg)
+            v = t[i].val;
+    for (unsigned i = 0; i < un; i++)
+        if (u[i].page == pg && u[i].reg == reg)
+            v = u[i].val;
+    return v;
+}
+
+/* Read back every register init_seq + rx_seq wrote (its last value; p0 r1 = self-clearing software
+ * reset skipped). Stock never checks. */
+static int verify(void)
+{
+    const creg_t *t[2] = {init_seq, rx_seq};
+    const unsigned n[2] = {sizeof init_seq / sizeof init_seq[0], sizeof rx_seq / sizeof rx_seq[0]};
+    for (int k = 0; k < 2; k++)
+        for (unsigned i = 0; i < n[k]; i++) {
+            const creg_t *e = &t[k][i];
+            if (e->page == 0xFF || (e->page == 0 && e->reg == 0x01))
+                continue;
+            /* check each (page, reg) once, at its last write */
+            int later = k == 0 ? last_val(t[0], i + 1, n[0], t[1], n[1], e->page, e->reg)
+                               : last_val(t[1], i + 1, n[1], 0, 0, e->page, e->reg);
+            if (later >= 0)
+                continue;
+            uint8_t r = e->reg, v;
+            if (sel(e->page) < 0 || i2c_write_read(I2C_BUS2, CODEC_ADDR, &r, 1, &v, 1) < 0)
+                return -1;
+            if (v != e->val) {
+                codec_verify_fail++;
+                codec_bad_reg = (uint32_t)e->page << 16 | (uint32_t)r << 8 | v;
+                return -1;
+            }
+        }
+    return 0;
+}
+
+/* Up to 3 attempts, each from the software reset at the top of init_seq. */
 int codec_init(void)
 {
     RCC->AHB1ENR |= RCC_AHB1ENR_GPIOC;
@@ -159,11 +206,16 @@ int codec_init(void)
     GPIOC->BSRR = 1u << RESET_PIN;
     GPIOC->MODER = (GPIOC->MODER & ~(3u << 2 * RESET_PIN)) | (1u << 2 * RESET_PIN);
     delay_ms(1);
-    page = -1;
-    if (run(init_seq, sizeof init_seq / sizeof init_seq[0]) < 0)
-        return -1;
-    codec_route_rx_iq();
-    return 0;
+    for (codec_tries = 1; codec_tries <= 3; codec_tries++) {
+        page = -1;
+        if (run(init_seq, sizeof init_seq / sizeof init_seq[0]) == 0) {
+            codec_route_rx_iq();
+            if (verify() == 0)
+                return 0;
+        }
+        delay_ms(10);
+    }
+    return -1;
 }
 
 void codec_route_rx_iq(void)

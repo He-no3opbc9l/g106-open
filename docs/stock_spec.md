@@ -365,3 +365,18 @@ Stock V1.4b01 has no CW decoder (no Morse table in the image). Own implementatio
   `cw_dec` (0 / 1), `cw_dec_level` (0 = AUTO, 1..20 dB).
 - UI: text on the VFO B line (y 31) in CW / CWR, right-aligned, speed at the right edge (inverted
   while key down); memory mode: text up to x 83 (MEMO tag), no speed; BIG SCOPE lowered to 23 px.
+
+## Squelch (own; stock has none)
+
+- S-meter squelch for NFM and SSB (LSB / USB only; L-D / U-D stay open for data software). Decided
+  in radio.c (`squelch_poll`) per scope frame (~40 ms) from the FFT S-meter level (`spectrum_dbm`,
+  peak bin inside the passband): opens at level x 2 on the 0..100 meter scale (= dB above
+  -121 dBm), closes 3 dB below after a hang (NFM 150 ms, SSB 500 ms: SSB has no carrier, the level
+  drops between words). The gate is applied in audio.c (`audio_set_sql_gate`, 5 ms ramp at 16 kHz)
+  after the NFM de-emphasis / after the SSB AGC; always open in TX.
+- Levels `nfm_sql` (default 9) and `ssb_sql` (default 0 = OFF), master switch `sql_on` (default on,
+  levels kept while off). Own EEPROM block v11 "GOPB" (0x1F00, CRC over 7 words): `ssb_sql`,
+  `sql_on` in the former pad4 bytes; older blocks load as SSB OFF, squelch on.
+- UI: SQL soft key (page 6) edits the level of the current mode (LSB / USB -> SSB SQL, else NFM SQL),
+  the arrow over the S-meter follows the edit; SQL long toggles `sql_on` (popup, stored at once);
+  SETTINGS > RX: SQUELCH (on / off), NFM SQUELCH, SSB SQUELCH.

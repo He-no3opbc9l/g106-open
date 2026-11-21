@@ -101,7 +101,7 @@ void audio_set_low_cut(float hz);
 /* Own: AM TX carrier level 1..20 (baseband carrier = level x 0.0005 FS at HIGH power). */
 void audio_set_am_drive(int level);
 /* Own: NFM squelch gate (the decision is made in radio.c from the S-meter level). */
-void audio_set_nfm_gate(bool open);
+void audio_set_sql_gate(bool open);
 /* CW band-pass: centre (tone) and bandwidth in Hz (also sets the decoder's own band-pass). */
 void audio_set_cw_filter(float tone_hz, float bw_hz);
 /* Own CW decoder tap (CW / CWR only): tone power, one value per CWDEC_FRAME_MS. read() takes up

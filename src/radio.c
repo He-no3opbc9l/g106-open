@@ -12,7 +12,8 @@
  *           page 6 (own): FILT = RX/TX audio filter of the current mode (SSB, DATA, AM 2.0..6.0 kHz,
  *                         NFM 2.0..3.0 kHz; CW opens CWF),
  *                         ZOOM = scope zoom 1.0x..3.0x (AGC speed: SETTINGS > RX),
- *                         SQL = NFM squelch OFF / 1..30 (S-meter threshold, arrow on the meter),
+ *                         SQL = squelch level of the current mode (NFM, else SSB) OFF / 1..30
+ *                               (S-meter threshold, arrow on the meter); long = squelch on / off,
  *                         SETT = SETTINGS menu (categories RX / TX / CW / DISPLAY / SYSTEM: all
  *                         own and advanced settings, see the SETTINGS menu section below)
  *   WFM (page 5 F1, stock 0x08033990): broadcast FM 87..108 MHz on the FM chip, see fm_key()
@@ -135,6 +136,8 @@ static const setting_t set_agc = {AGC_OFF, AGC_HARD, "AGC:", NULL, agc_names, &a
 /* Own: NFM squelch (stock has no NFM): opens when the S-meter level reaches nfm_sql x 2 dB
  * (3 steps per S unit: 24 = S9, 30 = S9+12); shown as an arrow over the S-meter. */
 static const setting_t set_sql = {0, 30, "NFM SQL:", "%o", NULL, &nfm_sql, 1, ST_OWN};
+/* Own: SSB squelch (LSB / USB, not the data modes), same S-meter scale, longer hang (speech pauses). */
+static const setting_t set_ssb_sql = {0, 30, "SSB SQL:", "%o", NULL, &ssb_sql, 1, ST_OWN};
 static const setting_t set_tx_power = {0, 2, "TX POWER:", NULL, txp_names,
                                        &wp.dsp_opt, 2, ST_WORKPARAMS};
 /* Own: LCD contrast, -10..+10 around the stock register value 0x38 (2 per step). */
@@ -148,6 +151,8 @@ static const setting_t set_freq_cal = {-FREQ_CAL_MAX, FREQ_CAL_MAX, "FREQ CAL:",
  * 1..20 dB over the noise floor. */
 static const char *const onoff_names[] = {"OFF", "ON"};
 static const setting_t set_cw_dec = {0, 1, "CW DECODER:", NULL, onoff_names, &cw_dec, 1, ST_OWN};
+/* Own: squelch master switch (NFM and SSB levels are kept while it is off). */
+static const setting_t set_sql_on = {0, 1, "SQUELCH:", NULL, onoff_names, &sql_on, 1, ST_OWN};
 static const setting_t set_cw_dec_lvl = {0, CW_DEC_LEVEL_MAX, "DEC LEVEL:", "%a", NULL,
                                          &cw_dec_level, 1, ST_OWN};
 static const float tx_power[3] = {0.2f, 0.4f, 1.0f};      /* stock 0x10000080 */
@@ -798,19 +803,25 @@ static void draw_cwdec(void)
     lcd_text_f(&font8, right + 1 - n * 6, 31, t, false);
 }
 
-/* NFM squelch threshold on the S-meter scale (0..100 = -121..-21 dBm), 0 = off. */
+/* Squelch threshold of the current mode on the S-meter scale (0..100 = -121..-21 dBm), 0 = off
+ * (or the squelch switched off). */
 static int sql_level(void)
 {
-    return cur()->mode == MODE_NFM && nfm_sql ? nfm_sql * 2 : 0;
+    if (!sql_on)
+        return 0;
+    int m = cur()->mode;
+    return m == MODE_NFM ? nfm_sql * 2 : m == MODE_LSB || m == MODE_USB ? ssb_sql * 2 : 0;
 }
 
-/* NFM squelch gate from the FFT S-meter level of each new scope frame (~40 ms): opens at the
- * threshold, closes 3 dB below it after a 150 ms hang (no chopping on short fades). */
+/* Squelch gate (NFM, SSB) from the FFT S-meter level of each new scope frame (~40 ms): opens at
+ * the threshold, closes 3 dB below it after a hang (NFM 150 ms: no chopping on short fades; SSB
+ * 500 ms: no carrier, the level drops between words). */
 static void squelch_poll(bool fresh, uint32_t now)
 {
     static bool open = true;
     static uint32_t below_since;
     int thr = sql_level();
+    uint32_t hang = cur()->mode == MODE_NFM ? 150 : 500;
     if (!thr || txing) {
         open = true;
         below_since = 0;
@@ -822,11 +833,11 @@ static void squelch_poll(bool fresh, uint32_t now)
         } else if (lvl < thr - 3) {
             if (!below_since)
                 below_since = now | 1;
-            else if (now - below_since >= 150)
+            else if (now - below_since >= hang)
                 open = false;
         }
     }
-    audio_set_nfm_gate(open);
+    audio_set_sql_gate(open);
 }
 
 /* Stock S-meter 0x0802f848: dBm (FFT based, see spectrum.c) clamped to -121..-21, smoothed
@@ -859,7 +870,7 @@ static void draw_smeter(void)
         for (int y = 42; y <= 46; y++)
             lcd_pixel(25 + smeter_peak, y, true);
     int sql = sql_level();
-    if (sql) {                          /* own: NFM squelch arrow (pointing down) over the bar */
+    if (sql) {                          /* own: squelch arrow (pointing down) over the bar */
         for (int dx = -1; dx <= 1; dx++)
             lcd_pixel(25 + sql + dx, 40, true);
         lcd_pixel(25 + sql, 41, true);
@@ -1545,7 +1556,8 @@ typedef struct {
 static const mitem_t mi_rx[] = {
     {"SSB FILTER", MI_SET, &set_filt[FILT_SSB]}, {"DATA FILTER", MI_SET, &set_filt[FILT_DATA]},
     {"AM FILTER", MI_SET, &set_filt[FILT_AM]}, {"NFM FILTER", MI_SET, &set_filt[FILT_NFM]},
-    {"LOW CUT", MI_SET, &set_low_cut}, {"AGC", MI_SET, &set_agc}, {"PREAMP", MI_PREAMP, NULL}, {"NFM SQUELCH", MI_SET, &set_sql},
+    {"LOW CUT", MI_SET, &set_low_cut}, {"AGC", MI_SET, &set_agc}, {"PREAMP", MI_PREAMP, NULL},
+    {"SQUELCH", MI_SET, &set_sql_on}, {"NFM SQUELCH", MI_SET, &set_sql}, {"SSB SQUELCH", MI_SET, &set_ssb_sql},
 };
 static const mitem_t mi_tx[] = {
     {"TX POWER", MI_SET, &set_tx_power}, {"MIC GAIN", MI_SET, &set_mic_gain},
@@ -1949,6 +1961,12 @@ static void softkey(int k, bool lng)
         }
         if (wp.page == 1 && k == 3)     /* QSK long: QSK TIME */
             open_edit(&set_qsk_time);
+        if (wp.page == 5 && k == 2 && state == UI_MAIN) {   /* SQL long (own): squelch on / off */
+            sql_on ^= 1;
+            popup(sql_on ? "SQL ON" : "SQL OFF");
+            if (settings_save_own() < 0)
+                msgbox("ERROR", "CAN'T SAVE!");
+        }
         panel_until = 0;
         return;
     }
@@ -1990,7 +2008,9 @@ static void softkey(int k, bool lng)
         break;
     }
     case 21: open_edit(&set_zoom); break;         /* ZOOM (own page 6) */
-    case 22: open_edit(&set_sql); break;          /* SQL (own page 6) */
+    case 22:                            /* SQL (own page 6): level of the current mode */
+        open_edit(cur()->mode == MODE_LSB || cur()->mode == MODE_USB ? &set_ssb_sql : &set_sql);
+        break;
     case 23: open_menu(); break;                  /* SETT: SETTINGS menu (own) */
     case 14:                            /* BP */
         wp.flags ^= WP_FLAG_BEEP;
@@ -2253,7 +2273,7 @@ static void draw(void)
         break;
     case UI_EDIT:
         draw_edit(blink);
-        if (edit == &set_sql)
+        if (edit == &set_sql || edit == &set_ssb_sql)
             draw_smeter();              /* own: the squelch arrow moves while editing */
         break;
     default:

@@ -104,6 +104,8 @@ extern uint8_t comp_level;              /* own setting: speech compressor 0 (off
 extern uint8_t mic_gain;                /* own setting: MICPGA 0..60 (0.5 dB), stock MG <= 30 */
 extern uint8_t agc_mode;                /* own setting: AGC_OFF..AGC_HARD (audio.h) */
 extern uint8_t nfm_sql;                 /* own setting: NFM squelch 0 (open)..30, 2 dB steps on the S-meter */
+extern uint8_t ssb_sql;                 /* own setting (v11): SSB squelch 0 (open)..30, same scale */
+extern uint8_t sql_on;                  /* own setting (v11): squelch master switch 0 off / 1 on */
 /* Own setting: LCD contrast level 0..CONTRAST_MAX, CONTRAST_STOCK = stock register value 0x38. */
 #define CONTRAST_MAX   20
 #define CONTRAST_STOCK 10

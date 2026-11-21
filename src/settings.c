@@ -146,6 +146,7 @@ int settings_save_param2(void)
 #define OWN_MAGIC8  0x38504F47u     /* "GOP8": v8, CRC over 6 words (+ AM MOD in the former pad2) */
 #define OWN_MAGIC9  0x39504F47u     /* "GOP9": v9, CRC over 6 words (+ LOW CUT in the former pad3) */
 #define OWN_MAGICA  0x41504F47u     /* "GOPA": v10, CRC over 7 words (+ CW decoder) */
+#define OWN_MAGICB  0x42504F47u     /* "GOPB": v11, CRC over 7 words (+ SSB squelch, squelch on/off in pad4) */
 typedef struct {
     uint32_t magic;
     uint8_t preamp;
@@ -164,9 +165,10 @@ typedef struct {
     uint16_t low_cut;           /* v9: LOW CUT 10..400 Hz (v1..v8: pad, 0) */
     uint8_t cw_dec;             /* v10: CW decoder 0 off / 1 on */
     uint8_t cw_dec_level;       /* v10: 0 = AUTO, 1..20 dB over the noise floor */
-    uint16_t pad4;
+    uint8_t ssb_sql;            /* v11: SSB squelch 0..30 (v1..v10: pad, 0) */
+    uint8_t sql_on;             /* v11: squelch master switch (v1..v10: pad; on) */
     uint32_t crc;               /* v1: word 2, v2: word 3, v3/v4: word 4, v5/v6: word 5, v7..v9: word 6,
-                                   v10: word 7 */
+                                   v10/v11: word 7 */
 } own_block_t;
 _Static_assert(sizeof(own_block_t) == 32, "own block = one EEPROM page");
 
@@ -177,6 +179,8 @@ uint8_t comp_level;
 uint8_t mic_gain = 20;
 uint8_t agc_mode = AGC_HARD;
 uint8_t nfm_sql = 9;
+uint8_t ssb_sql;
+uint8_t sql_on = 1;
 uint8_t lcd_contrast_lvl = CONTRAST_STOCK;
 uint8_t am_drive = AM_DRIVE_DEFAULT;
 int16_t freq_cal;
@@ -186,10 +190,10 @@ uint8_t cw_dec_level;
 
 int settings_save_own(void)
 {
-    own_block_t own = {OWN_MAGICA, preamp, filt_hi[FILT_SSB], (uint8_t)wp.page, scope_zoom,
+    own_block_t own = {OWN_MAGICB, preamp, filt_hi[FILT_SSB], (uint8_t)wp.page, scope_zoom,
                        {mic_eq[0], mic_eq[1], mic_eq[2]}, comp_level, mic_gain, agc_mode,
                        nfm_sql, lcd_contrast_lvl, {filt_hi[FILT_DATA], filt_hi[FILT_AM], filt_hi[FILT_NFM]}, am_drive,
-                       freq_cal, (uint16_t)low_cut_hz, cw_dec, cw_dec_level, 0, 0};
+                       freq_cal, (uint16_t)low_cut_hz, cw_dec, cw_dec_level, ssb_sql, sql_on, 0};
     own.crc = crc_words(&own, 7);
     return ee_write(EE_OWN, &own, sizeof own);
 }
@@ -328,7 +332,8 @@ int settings_load(void)
     const uint32_t *ow = (const uint32_t *)&own;
     bool own_ok = false;
     if (ee_read(EE_OWN, &own, sizeof own) == 0) {
-        bool v10 = own.magic == OWN_MAGICA && crc_words(&own, 7) == ow[7];
+        bool v11 = own.magic == OWN_MAGICB && crc_words(&own, 7) == ow[7];
+        bool v10 = v11 || (own.magic == OWN_MAGICA && crc_words(&own, 7) == ow[7]);
         bool v9 = v10 || (own.magic == OWN_MAGIC9 && crc_words(&own, 6) == ow[6]);
         bool v8 = v9 || (own.magic == OWN_MAGIC8 && crc_words(&own, 6) == ow[6]);
         bool v7 = v8 || (own.magic == OWN_MAGIC7 && crc_words(&own, 6) == ow[6]);
@@ -369,6 +374,10 @@ int settings_load(void)
         if (v10) {
             cw_dec = own.cw_dec & 1;
             cw_dec_level = own.cw_dec_level <= CW_DEC_LEVEL_MAX ? own.cw_dec_level : 0;
+        }
+        if (v11) {
+            ssb_sql = own.ssb_sql <= 30 ? own.ssb_sql : 0;
+            sql_on = own.sql_on & 1;
         }
     }
     if (own_ok) {

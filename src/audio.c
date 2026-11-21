@@ -191,8 +191,9 @@ static float blackman(int n, int len)
 #define SIN_N       256
 static float sin_tab[SIN_N + 1];                /* one period + guard */
 static float emph_p, emph_norm;                 /* exp(-2 pi 300 / fs), |H| at 1 kHz */
-static float fm_pi, fm_pq, fm_de, nfm_gain = 1.0f;
-static volatile bool nfm_open = true;           /* squelch gate, set by radio.c (S-meter) */
+static float fm_pi, fm_pq, fm_de;
+static volatile bool sql_open = true;           /* squelch gate (NFM, SSB), set by radio.c (S-meter) */
+static float sql_gain = 1.0f;                   /* gate with a 5 ms ramp (16 kHz samples) */
 static float fm_phase, fm_pre_x;
 
 /* Windowed-sinc low-pass, cut-off fc (fraction of fs), unity DC gain. */
@@ -649,9 +650,16 @@ static inline void fast_sincos(float ph, float *s, float *c)
     *c = sin_tab[k] + f * (sin_tab[k + 1] - sin_tab[k]);
 }
 
-void audio_set_nfm_gate(bool open)
+void audio_set_sql_gate(bool open)
 {
-    nfm_open = open;
+    sql_open = open;
+}
+
+/* Squelch gate gain, one step per 16 kHz sample. */
+static inline float sql_step(void)
+{
+    sql_gain += ((sql_open ? 1.0f : 0.0f) - sql_gain) * 0.0125f;
+    return sql_gain;
 }
 
 /* Quadrature discriminator arg(z[n] conj z[n-1]); the IQ spectrum inversion only flips the
@@ -662,11 +670,9 @@ static float nfm_demod(float i, float q)
     fm_pi = i;
     fm_pq = q;
     float d = fast_atan2(im, re);               /* rad / sample */
-    nfm_gain += ((nfm_open ? 1.0f : 0.0f) - nfm_gain) * 0.0125f;
-
     float x = d * (FS2 / (2 * PI_F * NFM_DEV));    /* 1.0 = full deviation */
     fm_de += (x - fm_de) * (1.0f - emph_p);         /* de-emphasis (one pole at 300 Hz) */
-    return hp_run(hp_rx, bpf_run(fm_de * emph_norm)) * nfm_gain * NFM_RX_OUT;
+    return hp_run(hp_rx, bpf_run(fm_de * emph_norm)) * sql_step() * NFM_RX_OUT;
 }
 
 /* One 16 kHz I/Q sample -> one 16 kHz audio sample. */
@@ -675,7 +681,7 @@ static float demod12(audio_mode_t m, float i, float q)
     switch (m) {
     case AUDIO_USB:
     case AUDIO_LSB:
-        return agc(hp_run(hp_rx, bpf_run(ssb_demod(i, q, m == AUDIO_LSB))));
+        return agc(hp_run(hp_rx, bpf_run(ssb_demod(i, q, m == AUDIO_LSB)))) * sql_step();
     case AUDIO_CW:
     case AUDIO_CWR: {
         float d = ssb_demod(i, q, m == AUDIO_CWR);
@@ -1206,7 +1212,7 @@ static void dsp_state_reset(void)
 static void dsp_check(void)
 {
     const float v[] = {agc_db, agc_peak, agc_env, iqb_gain, iqb_phase, dc_i, dc_q, y12,
-                       am_dc, tx_dc, alc_env, comp_env, cw_bq[1].y1, eq[2].y1, fm_de, nfm_gain,
+                       am_dc, tx_dc, alc_env, comp_env, cw_bq[1].y1, eq[2].y1, fm_de, sql_gain,
                        fm_phase, cwd_acc};
     for (unsigned k = 0; k < sizeof v / sizeof v[0]; k++)
         if (!isfinite(v[k])) {

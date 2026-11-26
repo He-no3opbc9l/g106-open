@@ -51,6 +51,15 @@ Working on the radio:
   DECODER LEVEL: AUTO (threshold between noise and signal, nothing is decoded below ~10 dB SNR in
   the decoder bandwidth) or 1..20 dB over the noise floor for weak signals (too low a level
   decodes the noise). The decoder pauses while transmitting.
+- Noise reduction (own, stock has none; SETTINGS > RX > NOISE REDUCER / NR LEVEL, default off;
+  FILT long press on soft-key page 6 switches it on / off): spectral noise reduction of the
+  received audio in SSB, CW, AM and NFM (not in the data modes L-D / U-D). The noise spectrum is
+  learnt continuously, no setup; a Wiener-type gain with decision-directed SNR keeps the residual
+  noise natural (no "musical" warbling). NR LEVEL 1..10 = noise attenuation 6..24 dB (default 5,
+  14 dB). Signal loudness stays the same (the AGC still measures the unprocessed signal), only the
+  noise gets quieter. Adds 24 ms of audio delay and ~7 % DSP load; "NR" is shown left of the
+  frequency while it is active. Rising noise is learnt within 1..3 s; a steady tone held for
+  seconds is slowly treated as noise. For weak CW a narrow CW filter (CWF) works better.
 - CAT: Icom CI-V protocol on USART1 like stock (19200 8N1), see [CAT](#cat).
 
 Deliberate differences from stock:
@@ -186,7 +195,7 @@ full list with deviations from stock is at the top of `src/cat.c`.
 |---|---|
 | `src/` | firmware sources (`radio.c` UI, `audio.c` DSP, `spectrum.c` scope, `settings.c` EEPROM, drivers) |
 | `ld/` | linker script (app at `0x08020000`) |
-| `tools/` | `xgf.py` (encrypt/decrypt), `flash_iap.py`, `flash_swd.*`, `extract_stock_gfx.py`, `patch_txall.py`, `cwdec_test.c` (host test), Ghidra scripts |
+| `tools/` | `xgf.py` (encrypt/decrypt), `flash_iap.py`, `flash_swd.*`, `extract_stock_gfx.py`, `patch_txall.py`, `cwdec_test.c` / `nr_test.c` (host tests), `nr_bench.c` + `nr_cycles.py` (NR cycle estimate), Ghidra scripts |
 | `docs/hardware.md` | hardware map: pins, peripherals, chips, bootloader contract |
 | `docs/stock_spec.md` | reverse-engineered stock behaviour (EEPROM layout, keys, UI, DSP, TX) |
 

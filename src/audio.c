@@ -6,6 +6,7 @@
 #include "audio.h"
 #include "fastmath.h"
 #include "cwdec.h"
+#include "nr.h"
 
 #define I2S2_BASE     0x40003800
 #define I2S2EXT_BASE  0x40003400
@@ -210,8 +211,11 @@ static void design_lpf(float *h, int n, float fc)
         h[i] /= sum;
 }
 
+static void nr_setup(void);
+
 static void dsp_init(void)
 {
+    nr_setup();
     for (int k = 0; k <= SIN_N; k++)
         sin_tab[k] = sinf(2 * PI_F * k / SIN_N);
     emph_p = expf(-2 * PI_F * 300.0f / FS2);
@@ -495,11 +499,72 @@ static int agc_hang;
 static float agc_dline[AGC_DELAY];
 static unsigned agc_dpos, agc_sub;
 
+/* Own noise reduction (nr.c, stock has none): spectral Wiener NR on the 16 kHz audio after the
+ * band-pass / CW filter and LOW CUT, before the AGC gain (NFM: before the squelch gate). The AGC
+ * keeps measuring the signal ahead of the NR, so the loudness of signals is the same with NR on
+ * or off and only the noise gets quieter (an AGC after the NR would pull the reduced noise back
+ * up in every speech pause; an NR after the AGC would see the noise floor jump with the gain).
+ * The NR delays by NR_DELAY (24 ms): its output replaces the AGC delay line, and the detector
+ * input is delayed by the difference, so the look-ahead stays 10 ms. ~7 % CPU while on (at most
+ * ~11k cycles in one interrupt), nothing while off. Requests from the main loop are taken over at
+ * the start of a block (process). */
+#define NR_AGC_LAG (NR_DELAY - AGC_DELAY)
+static nr_t nr_rx __attribute__((section(".ccm")));    /* NOLOAD: nr_reset() in dsp_init() */
+static float nr_dline[NR_AGC_LAG];
+static unsigned nr_dpos;
+static bool nr_run;                             /* NR in the chain for the current block */
+static int nr_level;                            /* level in use (ISR) */
+static volatile uint8_t nr_level_req;           /* audio_set_nr(): 0 = off */
+static volatile bool nr_reset_req, nr_flush_req;
+static audio_mode_t nr_mode;                    /* RX mode the noise estimate belongs to */
+
+void audio_set_nr(int level)
+{
+    level = level < 0 ? 0 : level > NR_LEVEL_MAX ? NR_LEVEL_MAX : level;
+    if (level && !nr_level_req)
+        nr_reset_req = true;                    /* stale estimate from the last time it was on */
+    nr_level_req = (uint8_t)level;
+}
+
+static void nr_setup(void)
+{
+    nr_init();
+    memset(&nr_rx, 0, sizeof nr_rx);            /* CCM is NOLOAD: random after power-on (ext_gain!) */
+    nr_reset(&nr_rx);
+}
+
+/* Start of a block (ISR): requests from the main loop. */
+static void nr_block(audio_mode_t m)
+{
+    if (nr_reset_req) {
+        nr_reset_req = nr_flush_req = false;
+        nr_reset(&nr_rx);
+        memset(nr_dline, 0, sizeof nr_dline);
+    } else if (nr_flush_req) {
+        nr_flush_req = false;
+        nr_flush(&nr_rx);
+        memset(nr_dline, 0, sizeof nr_dline);
+    }
+    int lvl = nr_level_req;
+    if (lvl && lvl != nr_level) {
+        nr_set_level(&nr_rx, lvl);              /* only the gain floor: the estimate stays */
+        nr_level = lvl;
+    }
+    nr_run = lvl && m >= AUDIO_USB && m <= AUDIO_NFM;
+}
+
 static float agc(float y)
 {
     float delayed = agc_dline[agc_dpos];
     agc_dline[agc_dpos] = y;
     agc_dpos = agc_dpos == AGC_DELAY - 1 ? 0 : agc_dpos + 1;
+    if (nr_run) {                               /* audio through the NR, detector delayed to match */
+        delayed = nr_process(&nr_rx, y);
+        float d = nr_dline[nr_dpos];
+        nr_dline[nr_dpos] = y;
+        nr_dpos = nr_dpos == NR_AGC_LAG - 1 ? 0 : nr_dpos + 1;
+        y = d;
+    }
 
     float ay = fabsf(y);
     agc_peak = ay > agc_peak ? ay : agc_peak + (ay - agc_peak) * 0.5f;
@@ -672,7 +737,10 @@ static float nfm_demod(float i, float q)
     float d = fast_atan2(im, re);               /* rad / sample */
     float x = d * (FS2 / (2 * PI_F * NFM_DEV));    /* 1.0 = full deviation */
     fm_de += (x - fm_de) * (1.0f - emph_p);         /* de-emphasis (one pole at 300 Hz) */
-    return hp_run(hp_rx, bpf_run(fm_de * emph_norm)) * sql_step() * NFM_RX_OUT;
+    float a = hp_run(hp_rx, bpf_run(fm_de * emph_norm));
+    if (nr_run)
+        a = nr_process(&nr_rx, a);
+    return a * sql_step() * NFM_RX_OUT;
 }
 
 /* One 16 kHz I/Q sample -> one 16 kHz audio sample. */
@@ -930,6 +998,13 @@ int audio_i2s_restart(void)
 void audio_set_mode(audio_mode_t m)
 {
     agc_params(m, agc_speed);                   /* stock decay rates per mode, see agc_times */
+    if (m >= AUDIO_USB && m <= AUDIO_NFM) {     /* NR: new noise estimate for another RX mode; */
+        if (m != nr_mode)                       /* back from TX: only drop the old audio */
+            nr_reset_req = true;
+        else if (mode != m)
+            nr_flush_req = true;
+        nr_mode = m;
+    }
     mode = m;
 }
 
@@ -1239,6 +1314,8 @@ static void dsp_state_reset(void)
     agc_g = 1.0f;
     tx_dc = tx_prev = alc_env = comp_env = 0;
     alc_gain = comp_g = 1.0f;
+    nr_reset(&nr_rx);
+    memset(nr_dline, 0, sizeof nr_dline);
 }
 
 static void dsp_check(void)
@@ -1273,6 +1350,7 @@ static void process(const volatile uint16_t *in, volatile uint16_t *out)
     float pl = peak_l, pr = peak_r, g = gain;
     audio_mode_t m = mode;
     bool sw_in = swap_in, sw_out = swap_out;
+    nr_block(m);
 
     for (int i = 0; i < AUDIO_BLOCK; i++, in += 4, out += 4) {
         float l = in_sample(in), r = in_sample(in + 2);

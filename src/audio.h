@@ -109,5 +109,8 @@ void audio_set_cw_filter(float tone_hz, float bw_hz);
  * to max frames out of the ring (256 ms deep), returns the count. */
 void audio_cwdec_enable(bool on);
 int audio_cwdec_read(float *p, int max);
+/* Own noise reduction (nr.c) in the RX chain: 0 = off (no cost), 1..NR_LEVEL_MAX = strength.
+ * Switching it on starts a fresh noise estimate; so does a new RX mode. */
+void audio_set_nr(int level);
 
 #endif

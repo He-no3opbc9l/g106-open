@@ -125,6 +125,10 @@ extern uint8_t am_drive;                /* own: AM TX carrier level 1..20 (own b
 #define CW_DEC_LEVEL_MAX 20
 extern uint8_t cw_dec;
 extern uint8_t cw_dec_level;
+/* Own: receive noise reduction on/off and its level 1..NR_LEVEL_MAX (nr.h) (own block v12). */
+#define NR_LEVEL_DEFAULT 5
+extern uint8_t nr_on;
+extern uint8_t nr_level;
 
 /* Returns 0 if the stock work params were valid (CRC ok), <0 if defaults were used. */
 int settings_load(void);

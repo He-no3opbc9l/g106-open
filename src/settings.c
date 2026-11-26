@@ -4,6 +4,7 @@
 #include "system.h"
 #include "settings.h"
 #include "audio.h"
+#include "nr.h"
 
 #define EEPROM_ADDR 0x50
 #define EE_WORKPARAMS 0x0C00
@@ -134,7 +135,7 @@ int settings_save_param2(void)
     return ee_write(0x1000, &param2, sizeof param2);
 }
 
-/* Our own block (outside the stock layout, which leaves 0x1F00 unused): global preamp. */
+/* Our own block (outside the stock layout, which leaves 0x1F00.. unused; 0x1F00..0x1F3F since v12). */
 #define EE_OWN      0x1F00
 #define OWN_MAGIC   0x4E504F47u     /* "GOPN": v1, CRC over 2 words */
 #define OWN_MAGIC2  0x32504F47u     /* "GOP2": v2, CRC over 3 words (+ mic EQ) */
@@ -147,6 +148,8 @@ int settings_save_param2(void)
 #define OWN_MAGIC9  0x39504F47u     /* "GOP9": v9, CRC over 6 words (+ LOW CUT in the former pad3) */
 #define OWN_MAGICA  0x41504F47u     /* "GOPA": v10, CRC over 7 words (+ CW decoder) */
 #define OWN_MAGICB  0x42504F47u     /* "GOPB": v11, CRC over 7 words (+ SSB squelch, squelch on/off in pad4) */
+#define OWN_MAGICC  0x43504F47u     /* "GOPC": v12, 64 bytes (two EEPROM pages), CRC over 15 words
+                                       (+ noise reduction in word 8) */
 typedef struct {
     uint32_t magic;
     uint8_t preamp;
@@ -167,10 +170,16 @@ typedef struct {
     uint8_t cw_dec_level;       /* v10: 0 = AUTO, 1..20 dB over the noise floor */
     uint8_t ssb_sql;            /* v11: SSB squelch 0..30 (v1..v10: pad, 0) */
     uint8_t sql_on;             /* v11: squelch master switch (v1..v10: pad; on) */
-    uint32_t crc;               /* v1: word 2, v2: word 3, v3/v4: word 4, v5/v6: word 5, v7..v9: word 6,
-                                   v10/v11: word 7 */
+    uint32_t crc_v11;           /* v10/v11: CRC (v1..v9: in word 2..6, see load); v12: 0 */
+    /* v12: second page */
+    uint8_t nr_on;              /* v12: noise reduction 0 off / 1 on */
+    uint8_t nr_level;           /* v12: 1..NR_LEVEL_MAX */
+    uint8_t pad12[2];
+    uint32_t rsv[6];            /* free for later versions, 0 */
+    uint32_t crc;               /* v12: word 15 */
 } own_block_t;
-_Static_assert(sizeof(own_block_t) == 32, "own block = one EEPROM page");
+_Static_assert(sizeof(own_block_t) == 64, "own block = two EEPROM pages");
+_Static_assert(__builtin_offsetof(own_block_t, crc_v11) == 28, "v1..v11 layout");
 
 uint8_t filt_hi[FILT_COUNT] = {27, 30, 40, 30};
 uint8_t scope_zoom = 10;
@@ -187,14 +196,17 @@ int16_t freq_cal;
 int16_t low_cut_hz = 20;
 uint8_t cw_dec;
 uint8_t cw_dec_level;
+uint8_t nr_on;
+uint8_t nr_level = NR_LEVEL_DEFAULT;
 
 int settings_save_own(void)
 {
-    own_block_t own = {OWN_MAGICB, preamp, filt_hi[FILT_SSB], (uint8_t)wp.page, scope_zoom,
+    own_block_t own = {OWN_MAGICC, preamp, filt_hi[FILT_SSB], (uint8_t)wp.page, scope_zoom,
                        {mic_eq[0], mic_eq[1], mic_eq[2]}, comp_level, mic_gain, agc_mode,
                        nfm_sql, lcd_contrast_lvl, {filt_hi[FILT_DATA], filt_hi[FILT_AM], filt_hi[FILT_NFM]}, am_drive,
-                       freq_cal, (uint16_t)low_cut_hz, cw_dec, cw_dec_level, ssb_sql, sql_on, 0};
-    own.crc = crc_words(&own, 7);
+                       freq_cal, (uint16_t)low_cut_hz, cw_dec, cw_dec_level, ssb_sql, sql_on, 0,
+                       nr_on, nr_level, {0, 0}, {0}, 0};
+    own.crc = crc_words(&own, 15);
     return ee_write(EE_OWN, &own, sizeof own);
 }
 
@@ -332,7 +344,8 @@ int settings_load(void)
     const uint32_t *ow = (const uint32_t *)&own;
     bool own_ok = false;
     if (ee_read(EE_OWN, &own, sizeof own) == 0) {
-        bool v11 = own.magic == OWN_MAGICB && crc_words(&own, 7) == ow[7];
+        bool v12 = own.magic == OWN_MAGICC && crc_words(&own, 15) == ow[15];
+        bool v11 = v12 || (own.magic == OWN_MAGICB && crc_words(&own, 7) == ow[7]);
         bool v10 = v11 || (own.magic == OWN_MAGICA && crc_words(&own, 7) == ow[7]);
         bool v9 = v10 || (own.magic == OWN_MAGIC9 && crc_words(&own, 6) == ow[6]);
         bool v8 = v9 || (own.magic == OWN_MAGIC8 && crc_words(&own, 6) == ow[6]);
@@ -378,6 +391,10 @@ int settings_load(void)
         if (v11) {
             ssb_sql = own.ssb_sql <= 30 ? own.ssb_sql : 0;
             sql_on = own.sql_on & 1;
+        }
+        if (v12) {
+            nr_on = own.nr_on & 1;
+            nr_level = own.nr_level >= 1 && own.nr_level <= NR_LEVEL_MAX ? own.nr_level : NR_LEVEL_DEFAULT;
         }
     }
     if (own_ok) {

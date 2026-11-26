@@ -24,7 +24,7 @@ LDFLAGS  := $(ARCH) -T ld/g106_app.ld -nostartfiles --specs=nano.specs --specs=n
             -Wl,--gc-sections -Wl,-Map=$(BUILD)/$(TARGET).map
 LDLIBS   := -lm
 
-.PHONY: all clean flash-swd flash-iap restore-stock-swd stock test-cwdec FORCE
+.PHONY: all clean flash-swd flash-iap restore-stock-swd stock test-cwdec test-nr bench-nr FORCE
 
 all: $(BUILD)/$(TARGET).bin $(BUILD)/$(TARGET).xgf
 
@@ -95,6 +95,19 @@ HOSTCC ?= cc
 test-cwdec: | $(BUILD)
 	$(HOSTCC) -O2 -std=c11 -D_DEFAULT_SOURCE -Wall -Wextra -Isrc tools/cwdec_test.c src/cwdec.c -lm -o $(BUILD)/cwdec_test
 	$(BUILD)/cwdec_test
+
+# Host test of the receive noise reduction (SNR gain, distortion, musical noise, tracking, stability).
+test-nr: | $(BUILD)
+	$(HOSTCC) -O2 -std=c11 -D_DEFAULT_SOURCE -Wall -Wextra -Isrc tools/nr_test.c src/nr.c -lm -o $(BUILD)/nr_test
+	$(BUILD)/nr_test $(SEED)
+
+# Cortex-M4 cycle estimate of the noise reduction: M4 build of src/nr.c traced under qemu-arm.
+bench-nr: | $(BUILD)
+	$(CC) $(ARCH) -std=c11 -O2 -ffp-contract=fast -ffreestanding -Isrc tools/nr_bench.c src/nr.c \
+	    -nostartfiles --specs=nano.specs --specs=nosys.specs -lm -Wl,-Ttext-segment=0x100000 -o $(BUILD)/nr_bench.elf
+	qemu-arm -cpu max -one-insn-per-tb -d exec,nochain -D $(BUILD)/nr_bench.log $(BUILD)/nr_bench.elf
+	python3 -I tools/nr_cycles.py $(BUILD)/nr_bench.elf $(BUILD)/nr_bench.log
+	rm -f $(BUILD)/nr_bench.log
 
 clean:
 	rm -rf $(BUILD)

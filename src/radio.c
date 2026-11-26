@@ -26,6 +26,7 @@
 #include <string.h>
 #include "keyer.h"
 #include "cwdec.h"
+#include "nr.h"
 #include <math.h>
 #include "stm32f4.h"
 #include "system.h"
@@ -155,6 +156,9 @@ static const setting_t set_cw_dec = {0, 1, "CW DECODER:", NULL, onoff_names, &cw
 static const setting_t set_sql_on = {0, 1, "SQUELCH:", NULL, onoff_names, &sql_on, 1, ST_OWN};
 static const setting_t set_cw_dec_lvl = {0, CW_DEC_LEVEL_MAX, "DEC LEVEL:", "%a", NULL,
                                          &cw_dec_level, 1, ST_OWN};
+/* Own: receive noise reduction (nr.c) on / off and strength (gain floor -6 .. -24 dB). */
+static const setting_t set_nr = {0, 1, "NR:", NULL, onoff_names, &nr_on, 1, ST_OWN};
+static const setting_t set_nr_level = {1, NR_LEVEL_MAX, "NR LEVEL:", "%d", NULL, &nr_level, 1, ST_OWN};
 static const float tx_power[3] = {0.2f, 0.4f, 1.0f};      /* stock 0x10000080 */
 
 static void apply_contrast(void)
@@ -309,6 +313,18 @@ static void apply_filters(void)
     audio_set_rx_filter(fg == FILT_NFM ? 300 : 20, (fg < 0 ? filt_hi[FILT_SSB] : filt_hi[fg]) * 100.0f);
 }
 
+/* Own NR: in the RX chain of every mode except the data modes (decoder software wants the
+ * unprocessed audio). TX-safe (only a request to the DSP interrupt). */
+static bool nr_active(int mode)
+{
+    return nr_on && mode != MODE_LD && mode != MODE_UD;
+}
+
+static void apply_nr(void)
+{
+    audio_set_nr(nr_active(cur()->mode) ? nr_level : 0);
+}
+
 static void apply_mode(void)
 {
     static const int demod[MODE_COUNT] = {AUDIO_LSB, AUDIO_LSB, AUDIO_USB, AUDIO_USB,
@@ -317,6 +333,7 @@ static void apply_mode(void)
     audio_set_gain(1.0f);
     apply_filters();
     audio_set_mode(demod[cur()->mode]);
+    apply_nr();
     apply_freq();                       /* LO offset depends on the mode */
 }
 
@@ -1117,6 +1134,8 @@ static void setting_set(const setting_t *s, int v)
         audio_set_agc(agc_mode);
     if (s == &set_cw_dec_lvl)
         cwdec_set_level(cw_dec_level);
+    if (s == &set_nr || s == &set_nr_level)
+        apply_nr();
     if (s == &set_cw_tone || s == &set_key_speed || s == &set_key_mode || s == &set_iambic ||
         s == &set_cw_ratio || s == &set_qsk_time)
         apply_keyer();
@@ -1556,7 +1575,8 @@ typedef struct {
 static const mitem_t mi_rx[] = {
     {"SSB FILTER", MI_SET, &set_filt[FILT_SSB]}, {"DATA FILTER", MI_SET, &set_filt[FILT_DATA]},
     {"AM FILTER", MI_SET, &set_filt[FILT_AM]}, {"NFM FILTER", MI_SET, &set_filt[FILT_NFM]},
-    {"LOW CUT", MI_SET, &set_low_cut}, {"AGC", MI_SET, &set_agc}, {"PREAMP", MI_PREAMP, NULL},
+    {"LOW CUT", MI_SET, &set_low_cut}, {"AGC", MI_SET, &set_agc},
+    {"NOISE REDUCER", MI_SET, &set_nr}, {"NR LEVEL", MI_SET, &set_nr_level}, {"PREAMP", MI_PREAMP, NULL},
     {"SQUELCH", MI_SET, &set_sql_on}, {"NFM SQUELCH", MI_SET, &set_sql}, {"SSB SQUELCH", MI_SET, &set_ssb_sql},
 };
 static const mitem_t mi_tx[] = {
@@ -1961,6 +1981,13 @@ static void softkey(int k, bool lng)
         }
         if (wp.page == 1 && k == 3)     /* QSK long: QSK TIME */
             open_edit(&set_qsk_time);
+        if (wp.page == 5 && k == 0 && state == UI_MAIN) {   /* FILT long (own): noise reduction on / off */
+            nr_on ^= 1;
+            apply_nr();
+            popup(nr_on ? "NR ON" : "NR OFF");
+            if (settings_save_own() < 0)
+                msgbox("ERROR", "CAN'T SAVE!");
+        }
         if (wp.page == 5 && k == 2 && state == UI_MAIN) {   /* SQL long (own): squelch on / off */
             sql_on ^= 1;
             popup(sql_on ? "SQL ON" : "SQL OFF");
@@ -2246,6 +2273,8 @@ static void draw(void)
     if (cat_link())                     /* stock 0x08033400: CAT frames seen recently */
         lcd_bitmap(&icon_cat, 75, 1);
 
+    if (nr_active(v->mode) && state != UI_MC)  /* own: NR on, small tag over the VFO letter */
+        lcd_text_f(&font6, 2, 11, "NR", false);
     lcd_text_f(&font8, 3, 19, vi ? "B" : "A", false);
     draw_main_freq(v->freq, state == UI_MAIN || state == UI_MSGBOX ? *digit() : -1);
 

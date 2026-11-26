@@ -380,3 +380,27 @@ Stock V1.4b01 has no CW decoder (no Morse table in the image). Own implementatio
 - UI: SQL soft key (page 6) edits the level of the current mode (LSB / USB -> SSB SQL, else NFM SQL),
   the arrow over the S-meter follows the edit; SQL long toggles `sql_on` (popup, stored at once);
   SETTINGS > RX: SQUELCH (on / off), NFM SQUELCH, SSB SQUELCH.
+
+## Noise reduction (own; stock has none)
+
+- `src/nr.c` (host test `make test-nr`, cycle estimate `make bench-nr`): STFT 256 points at 16 kHz
+  (62.5 Hz bins), hop 128, sqrt-Hann analysis / synthesis; noise PSD per bin by the SPP-based MMSE
+  estimator (Gerkmann & Hendriks 2012: a priori SNR 15 dB, smoothing 0.9 per 8 ms frame, stagnation
+  cap 0.99); gain = Wiener on the decision-directed a priori SNR (alpha 0.98, xi_min -25 dB), floor
+  = NR LEVEL (1..10 -> -6..-24 dB) and noise over-estimation 1 + 0.08 (level - 1). Faster DD
+  smoothing (0.9 / 0.8) was measured: clearly "musical" residual noise (kurtosis ratio 1.5..5 at
+  level >= 5), so 0.98 everywhere.
+- Place (audio.c): after the band-pass / CW biquads + LOW CUT, before the AGC gain; the AGC detector
+  still sees the input (delayed by NR_DELAY - 160 so the look-ahead stays 10 ms), so signals keep
+  their loudness and only the noise drops. NFM: before the squelch gate. Not in L-D / U-D (radio.c).
+  Delay 384 samples = 24 ms (frame + one hop: the frame work is spread over 10 slots of the next
+  hop, at most ~11k cycles per DSP interrupt; ~95k cycles per frame = ~7 % CPU on average, 0 when
+  off). Fresh noise estimate on switch-on / RX mode change; back from TX only the audio buffers.
+- Settings: own block v12 "GOPC" (0x1F00, now 64 bytes = two EEPROM pages, CRC over 15 words at
+  word 15): `nr_on`, `nr_level` (default 5) in word 8; v11 blocks load as NR off. UI: SETTINGS > RX
+  NOISE REDUCER / NR LEVEL, FILT long (page 6) toggles, "NR" in font6 at (2, 11) left of the
+  frequency while active.
+- Host test (seed 0, level 5, speech in white noise): SNR 0 / 6 / 12 / 20 dB -> +8.6 / +8.7 / +8.1 /
+  +6.9 dB, noise in pauses -14 dB, clean speech passes with SDR 41 dB, residual noise kurtosis ratio
+  1.00 (level 10: 1.10); CW 20 WPM in a 500 Hz filter: +8 dB at 0 dB SNR, no gain at -6 dB (the
+  NR then mutes the marks as noise). Noise steps: -20 dB tracked in 0.36 s, +20 dB in 2.6 s.

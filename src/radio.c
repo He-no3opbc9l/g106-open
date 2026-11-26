@@ -1885,9 +1885,10 @@ static void menu_key(int code, bool lng)
  * codec diagnostics for the "I/Q swapped after power-on" problem, plus actions: IN / OUT SWAP
  * exchange L/R of the codec input (RX I/Q, TX mic) / output (TX I/Q), RESTART re-locks the I2S
  * slaves on the running codec clocks. Nothing is stored: every power-on starts clean. Tune
- * encoder = cursor, F4 / TUNE push = run the action, F1 (or F1 long) = back. ---- */
+ * encoder = cursor, TUNE push = run the action, any other key = back. ---- */
 enum { DBG_SWAP_IN, DBG_SWAP_OUT, DBG_RESTART, DBG_WS, DBG_SR, DBG_POS, DBG_LOAD, DBG_RESETS, DBG_ROWS };
 static int dbg_sel;
+#define DBG_VIEW 5                      /* list rows: the soft-key bar is not drawn here */
 
 static void open_debug(void)
 {
@@ -1931,15 +1932,13 @@ static void dbg_row(int i, char *v, size_t n, const char **label)
 
 static void draw_debug(void)
 {
-    static const char *const l_run[4] = {"BACK", " ", " ", "RUN"};
-    static const char *const l_back[4] = {"BACK", " ", " ", " "};
     char v[20];
     const char *label;
-    int top = dbg_sel >= MENU_ROWS ? dbg_sel - MENU_ROWS + 1 : 0;
+    int top = dbg_sel >= DBG_VIEW ? dbg_sel - DBG_VIEW + 1 : 0;
 
     lcd_clear();
     draw_list_title("DEBUG", dbg_sel + 1, DBG_ROWS);
-    for (int r = 0; r < MENU_ROWS && top + r < DBG_ROWS; r++) {
+    for (int r = 0; r < DBG_VIEW && top + r < DBG_ROWS; r++) {
         int i = top + r, y = 11 + 9 * r;
         bool on = i == dbg_sel;
         if (on)
@@ -1948,8 +1947,7 @@ static void draw_debug(void)
         lcd_text_f(&font8, 4, y + 1, label, on);
         lcd_text_f(&font8, 119 - lcd_text_width(&font8, v), y + 1, v, on);
     }
-    draw_scrollbar(top, DBG_ROWS, MENU_ROWS);
-    draw_labels(dbg_sel <= DBG_RESTART ? l_run : l_back);
+    draw_scrollbar(top, DBG_ROWS, DBG_VIEW);    /* no soft-key bar: any key leaves */
 }
 
 static void debug_run(void)
@@ -1966,10 +1964,10 @@ static void debug_run(void)
 
 static void debug_key(int code, bool lng)
 {
-    if (code == KEY_F1)
-        state = UI_MAIN;                /* short and long: straight back */
-    else if (!lng && (code == KEY_F4 || code == KEY_TUNE_PUSH))
-        debug_run();
+    if (!lng && code == KEY_TUNE_PUSH && dbg_sel <= DBG_RESTART)
+        debug_run();                    /* TUNE push on an action row runs it */
+    else
+        state = UI_MAIN;                /* any other key leaves */
 }
 
 static void softkey(int k, bool lng)

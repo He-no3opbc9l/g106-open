@@ -169,13 +169,6 @@ OpenOCD session.
 
 The EEPROM is shared and stays in stock format, so stock starts with your settings.
 
-## Known issues
-
-- **S9+40 noise floor after power-on.** Sometimes the radio shows a constant S9+40 noise right after
-  switching on. If it happens, just power-cycle the radio. The cause is not fully investigated: a failed
-  codec init at power-on is the main suspect (init is now read back and retried, see issue #6), so
-  please report if it still happens in newer builds.
-
 ## CAT
 
 Same as stock: Icom CI-V on USART1 (the port used for IAP), **19200 8N1**, no echo, any CI-V

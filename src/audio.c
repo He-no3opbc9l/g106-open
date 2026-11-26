@@ -759,20 +759,52 @@ static void dma_setup(int s, uint32_t chsel, uint32_t dir, volatile void *periph
                    | (dir << 6);
 }
 
-int audio_start(void)
+/* Everything audio_start() set up back to the reset state (G106 OPEN 1.0.5): DSP interrupt off,
+ * both I2S slaves and DMA streams stopped (waits until the streams really are off), SPI2 + I2S2ext
+ * reset (drops a stale half-word in DR / OVR that would shift the stream by 16 bits), buffers and
+ * the block counter cleared. Safe before the first audio_start(). */
+void audio_stop(void)
 {
-    for (int i = 0; i < 48; i++)
-        tone[i] = 0.25f * sinf(2.0f * PI_F * i / 48.0f);
-    dsp_init();
-    audio_set_rx_filter(20, 2700);
-    audio_set_cw_filter(800, 500);
-    DEMCR |= 1u << 24;                          /* TRCENA */
-    DWT_CYCCNT = 0;
-    DWT_CTRL |= 1u;                             /* CYCCNTENA */
+    volatile uint32_t *i2s = (volatile uint32_t *)I2S2_BASE;
+    volatile uint32_t *ext = (volatile uint32_t *)I2S2EXT_BASE;
 
     RCC->AHB1ENR |= RCC_AHB1ENR_GPIOB | (1u << 21);    /* DMA1 */
     RCC->APB1ENR |= 1u << 14;                           /* SPI2 */
     __dsb();
+    REG32(0xE000E180) = 1u << 14;               /* NVIC ICER: DSP interrupt off */
+    i2s[7] &= ~(1u << 10);
+    ext[7] &= ~(1u << 10);
+    DMA_S(RX_STREAM, 0x00) = 0;
+    DMA_S(TX_STREAM, 0x00) = 0;
+    while ((DMA_S(RX_STREAM, 0x00) | DMA_S(TX_STREAM, 0x00)) & 1)
+        ;
+    RCC->APB1RSTR |= 1u << 14;                  /* SPI2RST */
+    __dsb();
+    RCC->APB1RSTR &= ~(1u << 14);
+    __dsb();
+    REG32(0xE000E280) = 1u << 14;               /* NVIC ICPR: drop a stale pending request */
+    for (unsigned k = 0; k < 2 * HALF_WORDS; k++)
+        rx_buf[k] = tx_buf[k] = 0;
+    block_count = 0;
+    peak_l = peak_r = 0;
+}
+
+int audio_start(void)
+{
+    static bool dsp_ready;
+    if (!dsp_ready) {                           /* tables once, audio_start() may be retried */
+        dsp_ready = true;
+        for (int i = 0; i < 48; i++)
+            tone[i] = 0.25f * sinf(2.0f * PI_F * i / 48.0f);
+        dsp_init();
+        audio_set_rx_filter(20, 2700);
+        audio_set_cw_filter(800, 500);
+    }
+    DEMCR |= 1u << 24;                          /* TRCENA */
+    DWT_CYCCNT = 0;
+    DWT_CTRL |= 1u;                             /* CYCCNTENA */
+
+    audio_stop();
 
     pin_af(12, 5);
     pin_af(13, 5);

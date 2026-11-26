@@ -12,7 +12,9 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-int codec_init(void);
+enum { CODEC_OK, CODEC_ERR_I2C = -1, CODEC_ERR_VERIFY = -2, CODEC_ERR_POWER = -3 };
+void codec_hold_reset(void);          /* PC6 low: codec stopped, no I2S clocks */
+int codec_init(void);                 /* one attempt from reset, 0 or CODEC_ERR_* */
 void codec_route_rx_iq(void);         /* RX: I/Q into the ADC, DAC to phones/speaker */
 void codec_route_mic_monitor(void);
 void codec_route_tx(bool data, uint8_t mic_gain);  /* TX: mic/data in, HP off, LOL/LOR = I/Q */   /* test: mic -> left ADC, DAC still to phones/speaker */

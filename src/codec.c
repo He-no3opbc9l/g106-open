@@ -152,7 +152,6 @@ void codec_route_tx(bool data, uint8_t mic_gain)
     }
 }
 
-volatile uint32_t codec_tries;           /* attempts of the last codec_init (1 = clean) */
 volatile uint32_t codec_verify_fail;     /* read-back mismatches */
 volatile uint32_t codec_bad_reg;         /* last mismatch: page << 16 | reg << 8 | read */
 
@@ -198,24 +197,55 @@ static int verify(void)
     return 0;
 }
 
-/* Up to 3 attempts, each from the software reset at the top of init_seq. */
-int codec_init(void)
+/* Codec held in reset (PC6 low): no BCLK / WCLK until codec_init(). */
+void codec_hold_reset(void)
 {
     RCC->AHB1ENR |= RCC_AHB1ENR_GPIOC;
     __dsb();
-    GPIOC->BSRR = 1u << RESET_PIN;
+    GPIOC->BSRR = 1u << (RESET_PIN + 16);
     GPIOC->MODER = (GPIOC->MODER & ~(3u << 2 * RESET_PIN)) | (1u << 2 * RESET_PIN);
-    delay_ms(1);
-    for (codec_tries = 1; codec_tries <= 3; codec_tries++) {
-        page = -1;
-        if (run(init_seq, sizeof init_seq / sizeof init_seq[0]) == 0) {
-            codec_route_rx_iq();
-            if (verify() == 0)
-                return 0;
+    page = -1;
+}
+
+static int rd(uint8_t pg, uint8_t reg, uint8_t *v)
+{
+    if (sel(pg) < 0)
+        return -1;
+    return i2c_write_read(I2C_BUS2, CODEC_ADDR, &reg, 1, v, 1) < 0 ? -1 : 0;
+}
+
+/* One attempt (G106 OPEN 1.0.5): reset released, init + RX routing written and read back, then
+ * wait (1 s) until the codec reports both ADCs (P0 R36 bits 6, 2) and both DACs (P0 R37 bits 7, 3)
+ * powered, then up to 2.5 s for the HPL / HPR gain-applied flags (P1 R63 bits 7, 6; a timeout
+ * there is not an error). Returns CODEC_ERR_*; the caller restarts the whole audio path. */
+int codec_init(void)
+{
+    codec_hold_reset();
+    delay_ms(2);
+    GPIOC->BSRR = 1u << RESET_PIN;
+    delay_ms(2);
+    page = -1;
+    if (run(init_seq, sizeof init_seq / sizeof init_seq[0]) < 0)
+        return CODEC_ERR_I2C;
+    codec_route_rx_iq();
+    if (verify() < 0)
+        return CODEC_ERR_VERIFY;
+
+    uint8_t a = 0, d = 0, h = 0;
+    uint32_t t0 = millis();
+    for (;;) {
+        if (rd(0, 0x24, &a) == 0 && (a & 0x44) == 0x44 && rd(0, 0x25, &d) == 0 && (d & 0x88) == 0x88)
+            break;
+        if (millis() - t0 >= 1000) {
+            codec_bad_reg = 0x2400u | a | (uint32_t)d << 24;
+            return CODEC_ERR_POWER;
         }
-        delay_ms(10);
+        delay_ms(5);
     }
-    return -1;
+    t0 = millis();
+    while (millis() - t0 < 2500 && !(rd(1, 0x3F, &h) == 0 && (h & 0xC0) == 0xC0))
+        delay_ms(5);
+    return 0;
 }
 
 void codec_route_rx_iq(void)

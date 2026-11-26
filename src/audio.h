@@ -44,6 +44,7 @@ typedef struct {
 void audio_i2s_info(audio_i2s_info_t *o);
 /* Re-lock both slaves on the running codec clocks (see audio.c). 0 ok, -1 no clock. */
 int audio_i2s_restart(void);
+void audio_stop(void);           /* slaves + DMA off, SPI2 reset, buffers cleared */
 int audio_start(void);          /* I2S + DMA armed; call before codec_init() (codec = clock master) */
 void audio_set_mode(audio_mode_t m);
 void audio_set_gain(float g);   /* digital gain for MIC/IQ modes */
